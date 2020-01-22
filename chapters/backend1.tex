@@ -1,29 +1,29 @@
 % !Mode:: "TeX:UTF-8"
-\chapter{后端1}
+\chapter{backend 1}
 \label{cpt:backend1}
-\begin{mdframed}  
-	\textbf{主要目标}
-	\begin{enumerate}[labelindent=0em,leftmargin=1.5em]
-		\item 理解后端的概念。
-		\item 理解以EKF为代表的滤波器后端工作原理。
-		\item 理解非线性优化的后端，明白稀疏性是如何利用的。
-		\item 使用g2o和Ceres实际操作后端优化。
-	\end{enumerate}
+\begin{mdframed}
+    \textbf{main target}
+        \begin{enumerate}[labelindent=0em,leftmargin=1.5em]
+            \item understands the concept of the backend.
+            \item understands the working principle of the filter backend represented by EKF.
+            \item Understand the back end of nonlinear optimization and understand how sparsity is utilized.
+            \item uses g2o and Ceres to actually manipulate backend optimization.
+        \end{enumerate}
 \end{mdframed}
 
-本讲开始，我们转入SLAM系统的另一个重要模块：后端优化。
+At the beginning of this lecture, we transferred to another important module of the SLAM system: back-end optimization.
 
-我们看到，前端视觉里程计能给出一个短时间内的轨迹和地图，但由于不可避免的误差累积，这个地图在长时间内是不准确的。所以，在视觉里程计的基础上，我们还希望构建一个尺度、规模更大的优化问题，以考虑长时间内的最优轨迹和地图。不过，考虑到精度与性能的平衡，实际当中存在着许多不同的做法。
+We see that the front-end visual odometer can give a short time trajectory and map, but due to the inevitable accumulation of errors, this map is inaccurate for a long time. Therefore, based on the visual odometer, we also hope to construct a scale and scale optimization problem to consider the optimal trajectory and map over a long period of time. However, considering the balance between accuracy and performance, there are many different practices in practice.
 
 \newpage
 \includepdf{resources/other/ch10.pdf}
 
 \newpage
-\section{概述}
-\subsection{状态估计的概率解释}
-第2讲中提到，视觉里程计只有短暂的记忆，而我们希望整个运动轨迹在较长时间内都能保持最优的状态。我们可能会用最新的知识，更新较久远的状态——站在“久远的状态”的角度上看，仿佛是未来的信息告诉它“你应该在哪里”。所以，在后端优化中，我们通常考虑一段更长时间内（或所有时间内）的状态估计问题，而且不仅使用过去的信息更新自己的状态，也会用未来的信息来更新自己，这种处理方式不妨称为“批量的”（Batch）。否则，如果当前的状态只由过去的时刻决定，甚至只由前一个时刻决定，那不妨称为“渐进的”（Incremental）。
+\section{overview}
+\subsection{Probability interpretation of state estimation}
+As mentioned in the second lecture, the visual odometer has only a short memory, and we hope that the entire motion trajectory will remain optimal for a long time. We may use the latest knowledge to update the more distant state - from the perspective of "a long-term state", as if the future information tells it "Where should you be?" So, in back-end optimization, we usually consider a state estimation problem for a longer period of time (or all time), and not only use past information to update its state, but also update itself with future information. The processing method may be called "batch". Otherwise, if the current state is determined only by past moments, or even by the previous moment, it may be called "incremental".
 
-我们已经知道SLAM过程可以由运动方程和观测方程来描述。那么，假设在$t=0$到$t=N$的时间内，有位姿$\bm{x}_0$到$\bm{x}_N$，并且有路标$\bm{y}_1, \cdots, \bm{y}_M$。按照之前的写法，运动和观测方程为
+We already know that the SLAM process can be described by equations of motion and observation equations. So, suppose that during the time from $t=0$ to $t=N$, there is a pose $\bm{x}_0$ to $\bm{x}_N$, and there is a road sign $\bm{y}_1 , \cdots, \bm{y}_M$. According to the previous writing, the motion and observation equations are
 \begin{equation}
 \left\{ \begin{array}{l}
 {\bm{x}_k} = f\left( {{\bm{x}_{k - 1}},{\bm{u}_k}} \right) + \bm{w}_k \\
@@ -31,32 +31,32 @@
    \end{array} \right. \quad k=1, \ldots, N, \  j=1, \ldots, M.
 \end{equation}
 
-注意以下几点：
+Note the following:
 
 \begin{enumerate}
-	\item 观测方程中，只有当$\bm{x}_k$看到了$\bm{y}_j$时，才会产生观测数据，否则就没有。事实上，在一个位置通常只能看到一小部分路标。而且，由于视觉SLAM特征点数量众多，所以实际当中观测方程的数量会远远大于运动方程。
-	\item 我们可能没有测量运动的装置，所以也可能没有运动方程。在这个情况下，有若干种处理方式：认为确实没有运动方程，或假设相机不动，或假设相机匀速运动。这几种方式都是可行的。在没有运动方程的情况下，整个优化问题就只由许多个观测方程组成。这就非常类似于SfM（Structure from Motion）问题，相当于我们通过一组图像来恢复运动和结构。与SfM中不同的是，SLAM中的图像有时间上的先后顺序，而SfM中允许使用完全无关的图像。
+    \item In the observation equation, observation data is only generated when $\bm{x}_k$ sees $\bm{y}_j$, otherwise it is not. In fact, only a small number of road signs can usually be seen in one location. Moreover, due to the large number of visual SLAM feature points, the number of observation equations in practice will be much larger than the motion equation.
+    \item We may not have a device to measure motion, so there may be no equations of motion. In this case, there are several ways to deal with it: think that there is really no equation of motion, or that the camera is not moving, or that the camera is moving at a constant speed. These methods are all feasible. In the absence of an equation of motion, the entire optimization problem consists of only a few observation equations. This is very similar to the SfM (Structure from Motion) problem, which is equivalent to restoring motion and structure through a set of images. Unlike SfM, images in SLAM have a temporal order, while SfM allows the use of completely unrelated images.
 \end{enumerate}
 
-我们知道每个方程都受噪声影响，所以要把这里的位姿$\bm{x}$和路标$\bm{y}$看成\textbf{服从某种概率分布的随机变量}，而不是单独的一个数。因此，我们关心的问题就变成：当我拥有某些运动数据$\bm{u}$和观测数据$\bm{z}$时，如何来确定状态量$\bm{x}, \bm{y}$的分布？进而，如果得到了新时刻的数据，那么它们的分布又将发生怎样的变化？在比较常见且合理的情况下，我们假设状态量和噪声项服从高斯分布——这意味着在程序中只需要储存它们的均值和协方差矩阵即可。均值可看作是对变量最优值的估计，而协方差矩阵则度量了它的不确定性。那么，问题就转变为：当存在一些运动数据和观测数据时，我们如何去估计状态量的高斯分布？
+We know that each equation is affected by noise, so we should treat the pose $\bm{x}$ and the signpost $\bm{y}$ as \textbf{random variables with a certain probability distribution} instead of A single number. So, the question we care about becomes: How do I determine the state quantity $\bm{x}$, when I have some motion data $\bm{u}$ and observation data $\bm{z}$ Distribution of $\bm{y}$? Furthermore, if the data of the new moments are obtained, how will their distribution change again? In the more common and reasonable case, we assume that the state quantities and noise terms obey the Gaussian distribution - this means that only the mean and covariance matrices need to be stored in the program. The mean can be seen as an estimate of the optimal value of the variable, while the covariance matrix measures its uncertainty. Then, the question turns into: How do we estimate the Gaussian distribution of state quantities when there are some motion data and observation data?
 
-我们依然设身处地地扮演一下小萝卜。只有运动方程时，相当于我们蒙着眼睛在一个未知的地方走路。尽管我们知道自己每一步走了多远，但是随着时间增长，我们将对自己的位置越来越不确定——内心也就越不安。这说明在输入数据受噪声影响时，\textbf{误差是逐渐累积的}，我们对位置方差的估计将越来越大。但是，当我们睁开眼睛时，由于能够不断地观测到外部场景，使得位置估计的不确定性变小，我们就会越来越自信。如果用椭圆或椭球直观地表达协方差阵，那么这个过程有点像是在手机地图软件中走路的感觉。以\autoref{fig:uncertainty}~为例，读者可以想象，当没有观测数据时，这个圆会随着运动越来越大；而如果有正确的观测，圆就会缩小至一定的大小，保持稳定。
+We still play the role of a small radish. Only the equation of motion is equivalent to walking blindly in an unknown place. Although we know how far we go every step of the way, as time goes by, we will become more and more uncertain about our position – the more uneasy the heart. This shows that when the input data is affected by noise, \textbf{error is gradually accumulated}, we will estimate the position variance will be larger and larger. However, when we open our eyes, we are more and more confident because we can continuously observe external scenes and make the uncertainty of position estimation smaller. If you visually express the covariance matrix with an ellipse or ellipsoid, then the process is a bit like the feeling of walking in mobile map software. Taking \autoref{fig:uncertainty}~ as an example, the reader can imagine that when there is no observation data, the circle will grow larger and larger; if there is correct observation, the circle will shrink to a certain size and keep stable.
 
 \begin{figure}[!ht]
-	\centering
-	\includegraphics[width=0.66\textwidth]{backend1/uncertainty.pdf}
-	\caption{不确定性的直观描述。左侧：只有运动方程时，由于下一时刻的位姿是在上一时刻基础上添加了噪声，所以不确定性越来越大。右侧：存在路标点时，不确定性会明显减小。不过请注意，这只是一个直观的示意图，并非实际数据。}
-	\label{fig:uncertainty}
+\centering
+\includegraphics[width=0.66\textwidth]{backend1/uncertainty.pdf}
+\caption{Visual description of uncertainty. Left side: When there is only the motion equation, since the pose at the next moment adds noise on the basis of the previous moment, the uncertainty becomes larger and larger. Right side: When there are landmark points, the uncertainty will be significantly reduced. However, please note that this is just an intuitive diagram, not actual data. }
+\label{fig:uncertainty}
 \end{figure}
 
-上面的过程以比喻的形式解释了状态估计中的问题，下面我们要以定量的方式来看待它。在第\ref{cpt:6}讲中，我们介绍了最大似然估计，提到\textbf{批量状态估计问题可以转化为最大似然估计问题，并使用最小二乘法进行求解。}在本节，我们将探讨如何将该结论应用于渐进式问题，得到一些经典的结论。同时，在视觉SLAM里，最小二乘法又有何特殊的结构。
+The above process explains the problem in state estimation in the form of a metaphor. Let us look at it quantitatively. In the \ref{cpt:6} lecture, we introduce the maximum likelihood estimation, mentioning that the \textbf{batch state estimation problem can be transformed into the maximum likelihood estimation problem and solved by the least squares method. } In this section, we will explore how to apply this conclusion to progressive problems and get some classic conclusions. At the same time, in the visual SLAM, the least squares method has a special structure.
 
-首先，由于位姿和路标点都是待估计的变量，我们改变一下记号，令$\bm{x}_k$为$k$时刻的所有未知量。它包含了当前时刻的相机位姿与$m$个路标点。在这种记号的意义下（虽然与之前稍有不同，但含义是清楚的），写成：
+First, since both the pose and the landmark are variables to be estimated, we change the token so that $\bm{x}_k$ is all unknowns at time $k$. It contains the current camera pose and $m$ landmark points. In the sense of this mark (although slightly different from the previous one, but the meaning is clear), write:
 \begin{equation}
-\bm{x}_k  \buildrel \Delta \over =  \{ \bm{x}_k, \bm{y}_1, \ldots, \bm{y}_m \}.
+    \bm{x}_k  \buildrel \Delta \over =  \{ \bm{x}_k, \bm{y}_1, \ldots, \bm{y}_m \}.
 \end{equation}
 
-同时，把$k$时刻的所有观测记作$\bm{z}_k$。于是，运动方程与观测方程的形式可写得更加简洁。这里不会出现$\bm{y}$，但我们心里要明白这时$\bm{x}$中已经包含了之前的$\bm{y}$：
+At the same time, all observations at time $k$ are recorded as $\bm{z}_k$. Thus, the form of the equation of motion and the equation of observation can be written more concisely. $\bm{y}$ won't appear here, but we have to understand that $\bm{y}$ is already included in $\bm{x}$:
 \begin{equation}
 \left\{ \begin{array}{l}
 {\bm{x}_k} = f\left( {{\bm{x}_{k - 1}},{\bm{u}_k}} \right) + \bm{w}_k \\
@@ -64,301 +64,301 @@
 \end{array} \right. \quad k=1, \ldots, N .
 \end{equation}
 
-现在考虑第$k$时刻的情况。我们希望用过去$0$到$k$中的数据来估计现在的状态分布：
+Now consider the situation at the time of the $k$. We want to use the data from the past $0$ to $k$ to estimate the current state distribution:
 \begin{equation}
 P(\bm{x}_k | \bm{x}_0, \bm{u}_{1:k}, \bm{z}_{1:k}).
 \end{equation}
 
-下标$0:k$表示从$0$时刻到$k$时刻的所有数据。请注意，$\bm{z}_k$表示所有在$k$时刻的观测数据，它可能不止一个，只是这种记法更加方便。同时，$\bm{x}_k$实际上和$\bm{x}_{k-1}, \bm{x}_{k-2}$这些量都有关，但是此式没有显式地将它们写出来。
+The subscript $0:k$ represents all data from time $0$ to time $k$. Note that $\bm{z}_k$ means all observations at $k$, it may be more than one, but this is more convenient. At the same time, $\bm{x}_k$ is actually related to $\bm{x}_{k-1}, \bm{x}_{k-2}$, but this is not explicitly Write them out.
 
-下面我们来看如何对状态进行估计。按照贝叶斯法则，把$\bm{z}_k$与$\bm{x}_k$交换位置，有：
+Let's look at how to estimate the state. According to Bayes' rule, swap $\bm{z}_k$ with $\bm{x}_k$, with:
 \begin{equation}
 \label{eq:10-5}
 P\left( {{\bm{x}_k}|{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k}}} \right) \propto P\left( {{\bm{z}_k}|{\bm{x}_k}} \right) P\left( {{\bm{x}_k}|{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k - 1}}} \right).
 \end{equation}
 
-读者应该不会感到陌生。这里第一项称为\textbf{似然}，第二项称为\textbf{先验}。似然由观测方程给定，而先验部分，我们要明白当前状态$\bm{x}_k$是基于过去所有的状态估计得来的。至少，它会受$\bm{x}_{k-1}$影响，于是按照$\bm{x}_{k-1}$时刻为条件概率展开：
+Readers should not be unfamiliar. The first item here is called \textbf{likelihood} and the second item is called \textbf{priority}. The likelihood is given by the observation equation, and in the a priori part, we have to understand that the current state $\bm{x}_k$ is estimated based on all past states. At the very least, it will be affected by $\bm{x}_{k-1}$, so the conditional probability is expanded according to $\bm{x}_{k-1}$:
 \begin{equation}
 \label{eq:bayes-estimator}
 P\left( {{\bm{x}_k}|{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k - 1}}} \right) = \int {P\left( {{\bm{x}_k}|{\bm{x}_{k - 1}},{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k - 1}}} \right)P\left( {{\bm{x}_{k - 1}}|{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k - 1}}} \right) \mathrm{d}\bm{x}_{k-1} }.
 \end{equation}
 
-如果考虑更久之前的状态，也可以继续对此式进行展开，但现在我们只关心$k$时刻和$k-1$时刻的情况。至此，我们给出了贝叶斯估计，虽然上式还没有具体的概率分布形式，所以还没法实际地操作它。对这一步的后续处理，方法上产生了一些分歧。大体上讲，存在若干种选择：其一是假设\textbf{马尔可夫性}，简单的一阶马氏性认为，$k$时刻状态只与$k-1$时刻状态有关，而与再之前的无关。如果做出这样的假设，我们就会得到以\textbf{扩展卡尔曼滤波}（EKF）为代表的滤波器方法。在滤波方法中，我们会从某时刻的状态估计，推导到下一个时刻。另外一种方法是依然考虑$k$时刻状态与之前\textbf{所有}状态的关系，此时将得到\textbf{非线性优化}为主体的优化框架。非线性优化的基本知识已在前文介绍过。目前视觉SLAM的主流为非线性优化方法。不过，为了让本书更全面，我们要先介绍一下卡尔曼滤波器和EKF的原理。
+If you consider the state before the longer, you can continue to expand this style, but now we only care about the time of $k$ and $k-1$. So far, we have given Bayesian estimates, although the above formula does not have a specific form of probability distribution, so it is not practical to operate it. There are some differences in the method for the subsequent processing of this step. In general, there are several choices: one is the assumption of \textbf{Markovity}, and the simple first-order Markov property considers that the state of $k$ is only related to the state of $k-1$, and Nothing before. If we make this assumption, we will get a filter method represented by \textbf{Extended Kalman Filter} (EKF). In the filtering method, we will estimate the state from a certain moment and derive it to the next moment. Another way is to still consider the relationship between the state of $k$ and the previous \textbf{all} state, and then get the \textbf{non-linear optimization} as the main optimization framework. The basics of nonlinear optimization have been introduced in the previous section. At present, the mainstream of visual SLAM is a nonlinear optimization method. However, in order to make this book more comprehensive, we must first introduce the principle of Kalman filter and EKF.
 
-\subsection{线性系统和KF}
-我们首先来看滤波器模型。当我们假设了马尔可夫性，从数学角度会发生哪些变化呢？首先，当前时刻状态只和上一个时刻有关，式\eqref{eq:bayes-estimator}中右侧第一部分可进一步简化：
+\subsection{Linear System and KF}
+Let's first look at the filter model. When we assume Markovity, what changes will happen from a mathematical perspective? First, the current time state is only related to the previous time. The first part of the right side of the formula \eqref{eq:bayes-estimator} can be further simplified:
 \begin{equation}
 P\left( {{\bm{x}_k}|{\bm{x}_{k - 1}},{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k - 1}}} \right) = P\left( {{\bm{x}_k}|{\bm{x}_{k - 1}},{\bm{u}_k}} \right).
 \end{equation}
 
-这里，由于$k$时刻状态与$k-1$之前的无关，所以就简化成只与$\bm{x}_{k-1}$和$\bm{u}_k$有关的形式，与${k}$时刻的运动方程对应。第二部分可简化为
+Here, since the state of $k$ is not related to before $k-1$, it is reduced to a form related only to $\bm{x}_{k-1}$ and $\bm{u}_k$. Corresponds to the equation of motion at the time of ${k}$. The second part can be simplified to
 \begin{equation}
 P\left( {{\bm{x}_{k - 1}}|{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k - 1}}} \right) = P\left( {{\bm{x}_{k - 1}}|{\bm{x}_0},{\bm{u}_{1:k - 1}},{\bm{z}_{1:k - 1}}} \right).
 \end{equation}
 
-这是考虑到$k$时刻的输入量$\bm{u}_k$与$k-1$时刻的状态无关，所以我们把$\bm{u}_k$拿掉。可以看到，这一项实际上是$k-1$时刻的状态分布。于是，这一系列方程说明，我们实际在做的是“如何把$k-1$时刻的状态分布推导至$k$时刻”这样一件事。也就是说，在程序运行期间，我们只要维护一个状态量，对它不断地进行迭代和更新即可。进一步，如果假设状态量服从高斯分布，那么我们只需考虑维护状态量的均值和协方差即可。你可以想象成小萝卜上的定位系统一直在向外输出两个定位信息：一是自己的位姿，二是自己的不确定性。实际当中往往也是如此。
+This is because the input $bm{u}_k$ at the time of $k$ is not related to the state of $k-1$, so we take $\bm{u}_k$ off. As you can see, this item is actually a state distribution at the time of $k-1$. Thus, this series of equations shows that what we are actually doing is "how to derive the state distribution at the time of $k-1$ to the time of $k$". That is to say, during the running of the program, we only need to maintain a state quantity, and iterate and update it continuously. Further, if we assume that the state quantity obeys the Gaussian distribution, then we only need to consider the mean and covariance of the maintenance state quantity. You can imagine that the positioning system on the radish has been outputting two positioning information outwards: one is his own posture and the other is his own uncertainty. This is often the case in practice.
 
-我们从形式最简单的线性高斯系统开始，最后我们将得到卡尔曼滤波器。明确了起点和终点之后，我们再来考虑中间的路线。线性高斯系统是说，运动方程和观测方程可以由线性方程来描述：
+We start with the simplest linear Gaussian system, and finally we will get the Kalman filter. After clarifying the starting point and the end point, let's consider the middle route. Linear Gaussian systems say that equations of motion and observation equations can be described by linear equations:
 \begin{equation}
 \left\{ \begin{array}{l}
 {\bm{x}_k} = \bm{A}_k {{\bm{x}_{k - 1}}+{\bm{u}_k}} + \bm{w}_k \\
 {\bm{z}_{k}} = \bm{C}_k  { \bm{x}_k} + \bm{v}_{k} \end{array} \right. \quad k=1, \ldots, N .
 \end{equation}
-并假设所有的状态和噪声均满足高斯分布。记这里的噪声服从零均值高斯分布：
+It is also assumed that all states and noises satisfy the Gaussian distribution. Note that the noise here follows a zero-mean Gaussian distribution:
 \begin{equation}
 \bm{w}_k \sim N(\bm{0}, \bm{R}). \quad \bm{v}_k \sim N( \bm{0}, \bm{Q}).
 \end{equation}
 
-为了简洁，笔者省略了$\bm{R}$和$\bm{Q}$的下标。现在，利用马尔可夫性，假设我们知道了$k-1$时刻的后验（在$k-1$时刻看来）状态估计$\bm{\hat{x}}_{k-1}$及其协方差$\bm{\hat{P}}_{k-1}$，现在要根据$k$时刻的输入和观测数据，确定$\bm{x}_k$的后验分布。为区分推导中的先验和后验，我们在记号上做一点区别：以上帽子$\bm{\hat{x}}_k$表示后验，以下帽子$\check{\bm{x}}_k$表示先验分布，请读者不要混淆。
+For the sake of brevity, I omitted the subscripts of $\bm{R}$ and $\bm{Q}$. Now, using Markov property, suppose we know the posterior of $k-1$ (in the case of $k-1$) state estimation $\bm{\hat{x}}_{k-1} $ and its covariance $\bm{\hat{P}}_{k-1}$, now the posterior distribution of $\bm{x}_k$ is determined based on the input and observation data at time $k$. To distinguish between a priori and posterior in the derivation, we make a difference in the notation: the above hat $\bm{\hat{x}}_k$ indicates a posteriori, the following hat $\check{\bm{x}}_k $ indicates a prior distribution, please do not confuse the reader.
 
-卡尔曼滤波器的第一步，通过运动方程确定$\bm{x}_k$的先验分布。这一步是线性的，而高斯分布的线性变换仍是高斯分布。所以显然有：
+The first step of the Kalman filter is to determine the prior distribution of $\bm{x}_k$ by the equation of motion. This step is linear, while the linear transformation of the Gaussian distribution is still a Gaussian distribution. So obviously there are:
 \begin{equation}
 P\left( {{\bm{x}_k}|{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{1:k - 1}}} \right) = N\left( {\bm{A}_k {{\hat{\bm{x}}}_{k - 1}} + {\bm{u}_k}, \bm{A}_k\hat{\bm{P}}_{k-1} {\bm{A}_k^\mathrm{T}} + \bm{R}} \right).
 \end{equation}
 
-这一步称为\textbf{预测}，原理见附录\ref{sec:gauss-example}。它显示了如何从上一个时刻的状态，根据输入信息（但是有噪声）推断当前时刻的状态分布。这个分布也就是先验。记：
+This step is called \textbf{prediction}, and the principle is in the appendix \ref{sec:gauss-example}. It shows how the state distribution of the current time is inferred from the state of the previous moment based on the input information (but with noise). This distribution is also a priori. Remember:
 \begin{equation}
 \check{\bm{x}}_k = {\bm{A}_k {{\hat{\bm{x}}}_{k - 1}} + {\bm{u}_k}}, \quad \check{\bm{P}}_k = {\bm{A}_k \hat{\bm{P}}_{k-1} { \bm{A}^\mathrm{T}_k} + \bm{R}}.
 \end{equation}
 
-这非常自然。显然这一步状态的不确定度要变大，因为系统中添加了噪声。另一方面，由观测方程，我们可以计算在某个状态下应该产生怎样的观测数据：
+This is very natural. Obviously, the uncertainty of this step state will become larger because noise is added to the system. On the other hand, from the observation equation, we can calculate what kind of observation data should be produced under a certain state:
 \begin{equation}
 P\left( {{\bm{z}_k}|{\bm{x}_k}} \right) = N\left( {{\bm{C}_k}{\bm{x}_k},\bm{Q}} \right) .
 \end{equation}
 
-为了得到后验概率，我们想要计算它们的乘积，也就是由式\eqref{eq:10-5}给出的贝叶斯公式。然而，虽然我们知道最后会得到一个关于$\bm{x}_k$的高斯分布，但计算上是有一点点麻烦的，我们先把结果设为$\bm{x}_k \sim N(\bm{\hat{x}}_k, \bm{\hat{P}}_k )$，那么：
+In order to get the posterior probability, we want to calculate their product, which is the Bayesian formula given by the formula \eqref{eq:10-5}. However, although we know that we will get a Gaussian distribution about $\bm{x}_k$ in the end, it is a bit of a computational problem. Let's first set the result to $\bm{x}_k \sim N(\ Bm{\hat{x}}_k, \bm{\hat{P}}_k )$, then:
 \begin{equation}
 N(\bm{\hat{x}}_k, \bm{\hat{P}}_k ) = \eta N\left( {{\bm{C}_k}{\bm{x}_k},\bm{Q}} \right) \cdot N( \bm{\check{x}}_k, \bm{\check{P}}_k). 
 \end{equation}
 
-这里我们稍微用点讨巧的方法。既然我们已经知道等式两侧都是高斯分布，那就只需比较指数部分即可，而无须理会高斯分布前面的因子部分。指数部分很像是一个二次型的配方，我们来推导一下。首先把指数部分展开，有\footnote{这里的等号并不严格，实际允许相差与$\bm{x}_k$无关的常数。}：
+Here we use a little bit of a clever way. Now that we know that the equations are Gaussian on both sides, we only need to compare the exponential parts without regard to the factor part before the Gaussian distribution. The index part is very similar to a quadratic formula, let's deduce it. First expand the exponent section, there is \footnote{The equal sign here is not strict, and the constants that are not related to $\bm{x}_k$ are actually allowed. }:
 \begin{equation}
 {\left( {{\bm{x}_k} - {{\hat{\bm{x}}}_k}} \right)^\mathrm{T}}\hat{\bm{P}}_k^{ - 1}\left( {{\bm{x}_k} - {{\hat{\bm{x}}}_k}} \right) = {\left( {{\bm{z}_k} - {\bm{C}_k} {\bm{x}_k}} \right)^\mathrm{T}}{\bm{Q}^{ - 1}}\left( {{\bm{z}_k} - {\bm{C}_k}{\bm{x}_k}} \right) + {\left( {{\bm{x}_k} - {{\check{\bm{x}}}_k}} \right)^\mathrm{T}}\check{\bm{P}}_k^{ - 1}\left( {\bm{x}_k - {{\check{\bm{x}}}_k}} \right).
 \end{equation}
 
-为了求左侧的$\hat{\bm{x}}_k$和$\bm{\hat{P}}_k$，我们把两边展开，并比较$\bm{x}_k$的二次和一次系数。对于二次系数，有：
+To find $\hat{\bm{x}}_k$ and $\bm{\hat{P}}_k$ on the left, we expand the two sides and compare the second sum of $\bm{x}_k$ Once coefficient. For quadratic coefficients, there are:
 \begin{equation}
 \label{eq:kalman-cov}
 \hat{\bm{P}}_k^{ - 1} = \bm{C}_k^\mathrm{T}{\bm{Q}^{ - 1}}{\bm{C}_k} + \check {\bm{P}}_k^{ - 1}.
 \end{equation}
 
-该式给出了协方差的计算过程。为了便于后面列写式子，定义一个中间变量：
+This formula gives the calculation process of covariance. To facilitate the following formula, define an intermediate variable:
 \begin{equation}
 \label{eq:kalman-K}
 \bm{K} = \bm{\hat{P}}_k \bm{C}_k^\mathrm{T} \bm{Q}^{-1}.
 \end{equation}
 
-根据此定义，在式\eqref{eq:kalman-cov}的左右各乘$\bm{\hat{P}}_k$，有：
+According to this definition, the $\bm{\hat{P}}_k$ is multiplied by the left and right of the formula \eqref{eq:kalman-cov}, with:
 \begin{equation}
 \bm{I} = \bm{\hat{P}}_k \bm{C}_k^\mathrm{T} \bm{Q}^{-1} \bm{C}_k + \bm{\hat{P}}_k \bm{\check{P}}_k^{-1} = \bm{K} \bm{C}_k + \bm{\hat{P}}_k \bm{\check{P}}_k^{-1}.
 \end{equation}
 
-于是有\footnote{这里看似有一点儿循环定义的意思。我们由$\bm{\hat{P}}_k$定义了$\bm{K}$，又把$\bm{\hat{P}}_k$写成了$\bm{K}$的表达式。然而，实际当中$\bm{K}$可以不依靠$\bm{\hat{P}}_k$算得，但是这需要引入Sherman-Morrison-Woodbury恒等式\cite{Sherman1950}，参见本讲的习题。}：
+So there is \footnote{ here seems to have a little loop definition. We defined $\bm{K}$ by $\bm{\hat{P}}_k$ and wrote $\bm{\hat{P}}_k$ as an expression for $\bm{K}$ . However, in practice $\bm{K}$ can be calculated without relying on $\bm{\hat{P}}_k$, but this requires the introduction of Sherman-Morrison-Woodbury identity\cite{Sherman1950}, see the exercises in this lecture. }:
 \begin{equation}
 \bm{\hat{P}}_k = ( \bm{I} - \bm{K} \bm{C}_k ) \bm{\check{P}}_k.
 \end{equation}
 
-然后再比较一次项的系数，有：
+Then compare the coefficients of the item once, with:
 \begin{equation}
 - 2\hat {\bm{x}}_k^\mathrm{T} \hat{\bm{P}}_k^{ - 1}{\bm{x}_k} =  - 2\bm{z}_k^\mathrm{T} {\bm{Q}^{ - 1}}{\bm{C}_k}{\bm{x}_k} - 2\bm{\check {x}}_k^\mathrm{T} \bm{\check {P}}_k^{ - 1}{\bm{x}_k}.
 \end{equation}
 
-整理（取系数并转置）得：
+Finishing (take factor and transpose) to get:
 \begin{equation}
 \hat { \bm{P}}_k^{ - 1}{{\hat{\bm{x}}}_k} = \bm{C}_k^\mathrm{T} {\bm{Q}^{ - 1}}{\bm{z}_k} + \check{\bm{P}}_k^{ - 1}{{\bm{\check{x}}}_k}.
 \end{equation}
 
-两侧乘以$\bm{\hat{P}}_k$并代入式\eqref{eq:kalman-K}，得：
+Multiply both sides by $\bm{\hat{P}}_k$ and substitute \eqref{eq:kalman-K} to get:
 \begin{align}
 {{\bm{\hat {x}}}_k} &= {{\hat {\bm{P}}}_k} \bm{C}_k^\mathrm{T} { \bm{Q}^{ - 1}}{\bm{z}_k} + {{\bm{\hat{ P}}}_k}\check {\bm{P}}_k^{ - 1}{{\check {\bm{x}}}_k}\\
 &= \bm{K} {\bm{z}_k} + \left( {\bm{I} - \bm{K}{\bm{C}_k}} \right){{\bm{\check {x}}}_k} = {{\check {\bm{x}}}_k} + \bm{K} \left( {\bm{z}_k - {\bm{C}_k}{\bm{\check{x}}_k}} \right).
 \end{align}
 
-于是我们又得到了后验均值的表达。总而言之，上面的两个步骤可以归纳为“预测”（Predict）和“更新”（Update）两个步骤：
+So we got the expression of the posterior mean. In summary, the above two steps can be summarized into two steps: "Predict" and "Update":
 
 \begin{mdframed}
 \begin{enumerate}
-	\item 预测：
-	\begin{equation}
-	\check{\bm{x}}_k = {\bm{A}_k {{\hat{\bm{x}}}_{k - 1}} + {\bm{u}_k}}, \quad \check{\bm{P}}_k = {\bm{A}_k \hat{\bm{P}}_{k-1} { \bm{A}^\mathrm{T}_k} + \bm{R}}.
-	\end{equation}
-	\item 更新：
-	先计算$\bm{K}$，它又称为卡尔曼增益。
-	\begin{equation}
-	\label{eq:kalman-K-another}
-	\bm{K} = {{\check {\bm{P}}}_k} \bm{C}_k^\mathrm{T} {\left( {{\bm{C}_k}{{\check {\bm{P}}}_k}\bm{C}_k^\mathrm{T} + {\bm{Q}_k}} \right)^{ - 1}}.
-	\end{equation}
-	然后计算后验概率的分布。
-	\begin{equation}
-	\begin{array}{l}
-	\hat {\bm{x}}_k = {{\check {\bm{x}}}_k} + \bm{K} \left( {\bm{z}_k - {\bm{C}_k}{\bm{\check{x}}_k}} \right)\\
-	{{\bm{\hat {P}}}_k} = \left( {\bm{I} - \bm{K}{\bm{C}_k}} \right) \check{\bm{P}}_k.
-	\end{array}.
-	\end{equation}
+\item forecast:
+\begin{equation}
+\check{\bm{x}}_k = {\bm{A}_k {{\hat{\bm{x}}}_{k - 1}} + {\bm{u}_k}}, \quad \check{\bm{P}}_k = {\bm{A}_k \hat{\bm{P}}_{k-1} { \bm{A}^\mathrm{T}_k} + \bm {R}}.
+\end{equation}
+\item update:
+First calculate $\bm{K}$, which is also known as the Kalman gain.
+\begin{equation}
+\label{eq:kalman-K-another}
+\bm{K} = {{\check {\bm{P}}}_k} \bm{C}_k^\mathrm{T} {\left( {{\bm{C}_k}{{\check { \bm{P}}}_k}\bm{C}_k^\mathrm{T} + {\bm{Q}_k}} \right)^{ - 1}}.
+\end{equation}
+Then calculate the distribution of posterior probabilities.
+\begin{equation}
+\begin{array}{l}
+\hat {\bm{x}}_k = {{\check {\bm{x}}}_k} + \bm{K} \left( {\bm{z}_k - {\bm{C}_k} {\bm{\check{x}}_k}} \right)\\
+{{\bm{\hat {P}}}_k} = \left( {\bm{I} - \bm{K}{\bm{C}_k}} \right) \check{\bm{P} }_k.
+\end{array}.
+\end{equation}
 \end{enumerate}
 \end{mdframed}
 
-至此，我们推导了经典的卡尔曼滤波器的整个过程。事实上，卡尔曼滤波器有若干种推导方式，而我们使用的是从概率角度出发的最大后验概率估计的形式。我们看到，在线性高斯系统中，卡尔曼滤波器构成了该系统中的最大后验概率估计。而且，由于高斯分布经过线性变换后仍服从高斯分布，所以整个过程中我们没有进行任何的近似。可以说，卡尔曼滤波器构成了线性系统的最优无偏估计。
+So far, we have derived the entire process of the classic Kalman filter. In fact, the Kalman filter has several derivations, and we use the form of the maximum a posteriori probability estimate from a probabilistic perspective. We see that in linear Gaussian systems, the Kalman filter constitutes the largest a posteriori probability estimate in the system. Moreover, since the Gaussian distribution still obeys the Gaussian distribution after linear transformation, we have not made any approximation throughout the process. It can be said that the Kalman filter constitutes the optimal unbiased estimation of the linear system.
 
-\subsection{非线性系统和EKF}
-在理解了卡尔曼滤波之后，我们必须要澄清一点：SLAM中的运动方程和观测方程通常是非线性函数，尤其是视觉SLAM中的相机模型，需要使用相机内参模型及李代数表示的位姿，更不可能是一个线性系统。一个高斯分布，经过非线性变换后，往往不再是高斯分布，所以在非线性系统中，我们必须取一定的近似，将一个非高斯分布近似成高斯分布。
+\subsection{Nonlinear System and EKF}
+After understanding the Kalman filter, we must clarify that the motion equations and observation equations in SLAM are usually nonlinear functions, especially the camera model in the visual SLAM, which requires the use of the camera internal parameter model and the pose expressed by Lie algebra. It can't be a linear system. A Gaussian distribution, after nonlinear transformation, is often no longer a Gaussian distribution. Therefore, in a nonlinear system, we must take a certain approximation and approximate a non-Gaussian distribution to a Gaussian distribution.
 
-我们希望把卡尔曼滤波器的结果拓展到非线性系统中，称为扩展卡尔曼滤波器（Extended Kalman Filter，EKF）。通常的做法是，在某个点附近考虑运动方程及观测方程的一阶泰勒展开，只保留一阶项，即线性的部分，然后按照线性系统进行推导。令$k-1$时刻的均值与协方差矩阵为$\bm{\hat{x}}_{k-1},\bm{\hat{P}}_{k-1}$。在$k$时刻，我们把运动方程和观测方程在$\bm{\hat{x}}_{k-1},\bm{\hat{P}}_{k-1}$处进行\textbf{线性化}（相当于一阶泰勒展开），有：
+We hope to extend the results of the Kalman filter into a nonlinear system called the Extended Kalman Filter (EKF). It is common practice to consider the first-order Taylor expansion of the equation of motion and the observation equation near a certain point, leaving only the first-order term, the linear part, and then deriving it according to the linear system. Let the mean and covariance matrix of $k-1$ moment be $\bm{\hat{x}}_{k-1},\bm{\hat{P}}_{k-1}$. At $k$, we move the equations of motion and observations at $\bm{\hat{x}}_{k-1},\bm{\hat{P}}_{k-1}$\ Textbf{linearization} (equivalent to first-order Taylor expansion), with:
 \begin{equation}
 {\bm{x}_k} \approx f\left( {{{\bm{\hat x}}_{k - 1}},{\bm{u}_k}} \right) + {\left. {\frac{{\partial f}}{{\partial {\bm{x}_{k - 1}}}}} \right|_{{{\bm{\hat x}}_{k - 1}}}}\left( {{\bm{x}_{k - 1}} - {{\bm{\hat x}}_{k - 1}}} \right) + {\bm{w}_k}.
 \end{equation}
 
-记这里的偏导数为
+Note that the partial derivative here is
 \begin{equation}
 \bm{F} = \left. {\frac{{\partial f}}{{\partial {\bm{x}_{k - 1}}}}} \right|_{{{\bm{\hat x}}_{k - 1}}}.
 \end{equation}
 
-同样，对于观测方程，亦有：
+Similarly, for the observation equations, there are also:
 \begin{equation}
 {\bm{z}_k} \approx h\left( {{{\bm{\check x}}_k}} \right) + {\left. {\frac{{\partial h}}{{\partial {\bm{x}_k}}}} \right|_{{{\bm{\check x}}_k}}}\left( {\bm{x}_k - {{\bm{\check x}}_k}} \right) + {\bm{n}_k}.
 \end{equation}
 
-记这里的偏导数为
+Note that the partial derivative here is
 \begin{equation}
 \bm{H} = \left. {\frac{{\partial h}}{{\partial {\bm{x}_k}}}} \right|_{{{\bm{\check x}}_k}}.
 \end{equation}
 
-那么，在\textbf{预测}步骤中，根据运动方程有：
+Then, in the \textbf{prediction} step, according to the equation of motion:
 \begin{equation}
 P\left( {{\bm{x}_k}|{\bm{x}_0},{\bm{u}_{1:k}},{\bm{z}_{0:k - 1}}} \right)
  = N(f\left( {{{\bm{\hat x}}_{k - 1}},{\bm{u}_k}} \right), \bm{F}\bm{\hat{P}}_{k-1} \bm{F}^\mathrm{T} + \bm{R}_k).
 \end{equation}
 
-这些推导和卡尔曼滤波是十分相似的。为方便表述，记这里的先验和协方差的均值为
+These derivations and Kalman filters are very similar. For convenience, the mean of the prior and covariance here is recorded.
 \begin{equation}
 \bm{\check {x}}_k = f\left( {{{\bm{\hat x}}_{k - 1}},{\bm{u}_k}} \right), \quad \bm{\check{P}}_k = \bm{F}\bm{\hat{P}}_{k-1} \bm{F}^\mathrm{T} + \bm{R}_k.
 \end{equation}
 
-然后，考虑在观测中我们有：
+Then, consider that in the observation we have:
 \begin{equation}
 P\left( {{\bm{z}_k}|{\bm{x}_k}} \right) = N( h\left( {{{\bm{\check x}}_k}} \right) + \bm{H} \left( {\bm{x}_k - {{\bm{\check x}}_k}} \right), \bm{Q}_k ).
 \end{equation}
 
-最后，根据最开始的贝叶斯展开式，可以推导出$\bm{x}_k$的后验概率形式。我们略去中间的推导过程，只介绍其结果。读者可以仿照卡尔曼滤波器的方式，推导EKF的预测与更新方程。简而言之，我们会先定义一个\textbf{卡尔曼增益}$\bm{K}_k$：
+Finally, based on the initial Bayesian expansion, the posterior probability form of $\bm{x}_k$ can be derived. We skip the middle of the derivation process and only introduce the results. The reader can derive the prediction and update equations of the EKF in the same way as the Kalman filter. In short, we will first define a \textbf{Kalman gain}$\bm{K}_k$:
 \begin{equation}
 \bm{K}_k = {\bm{\check{P}}_{k}}{\bm{H}^\mathrm{T}}{\left( {\bm{H}{\bm{\check P}_k}{\bm{H}^\mathrm{T}} + {\bm{Q}_k}} \right)^{ - 1}}.
 \end{equation}
 
-在卡尔曼增益的基础上，后验概率的形式为
+Based on the Kalman gain, the posterior probability is in the form of
 \begin{equation}
 {{\bm{\hat x}}_k} = {{\bm{\check x}}_k} + {\bm{K}_k}\left( {{\bm{z}_k} - h\left( {{\bm{\check x}_k}} \right)} \right),{\bm{\hat P}_k} = \left( {\bm{I} - {\bm{K}_k}{\bm{H}}} \right) \bm{\check{P}}_k.
 \end{equation}
 
-卡尔曼滤波器给出了在线性化之后状态变量分布的变化过程。在线性系统和高斯噪声下，卡尔曼滤波器给出了无偏最优估计。而在SLAM这种非线性的情况下，它给出了单次线性近似下的最大后验估计（MAP）。
+The Kalman filter gives the evolution of the distribution of state variables after linearization. Under linear systems and Gaussian noise, the Kalman filter gives an unbiased optimal estimate. In the case of nonlinearity of SLAM, it gives the maximum a posteriori estimate (MAP) for a single linear approximation.
 
-\subsection{EKF的讨论}
-EKF以形式简洁、应用广泛著称。当想要在某段时间内估计某个不确定量时，我们首先想到的就是EKF。在早期的SLAM中，EKF占据了很长一段时间的主导地位，研究者们讨论了各种各样的滤波器在SLAM中的应用，如IF（信息滤波器）\textsuperscript{\cite{Sujan2005}}、IKF\textsuperscript{\cite{Janabi-Sharifi2010}}（Iterated KF）、UKF\textsuperscript{\cite{Li2010}}（Unscented KF）和粒子滤波器\textsuperscript{\cite{Sim2007, Lee2011, Gil2010a}}、SWF（Sliding Window \mbox{Filter）\textsuperscript{\cite{Sibley2010}}}，等等\textsuperscript{\cite{Chen2012}}\footnote{粒子滤波器的原理与卡尔曼滤波有较大不同。}，或者用分治法等思路改进EKF的效率\textsuperscript{\cite{Paz2008, Grasa2011}}。直至今日，尽管我们认识到非线性优化比滤波器占有明显的优势，但是在计算资源受限，或待估计量比较简单的场合，EKF仍不失为一种有效的方式。
+\subsection{EKF Discussion}
+EKF is known for its compact form and wide application. When we want to estimate an uncertainty in a certain period of time, the first thing we think of is EKF. In the early SLAM, EKF dominated for a long time, and researchers discussed the use of various filters in SLAM, such as IF (Information Filter)\textsuperscript{\cite{Sujan2005} }, IKF\textsuperscript{\cite{Janabi-Sharifi2010}}(Iterated KF), UKF\textsuperscript{\cite{Li2010}}(Unscented KF) and particle filter\textsuperscript{\cite{Sim2007, Lee2011, Gil2010a}} , SWF (Sliding Window \mbox{Filter)\textsuperscript{\cite{Sibley2010}}}, etc. \textsuperscript{\cite{Chen2012}}\footnote{The principle of particle filter is quite different from Kalman filter. }, or use the ideas of divide and conquer to improve the efficiency of EKF\textsuperscript{\cite{Paz2008, Grasa2011}}. To this day, although we recognize that nonlinear optimization has a clear advantage over filters, EKF is still an effective way when computing resources are limited or when the amount to be estimated is relatively simple.
 
-EKF有哪些局限呢？
-
-\begin{enumerate}
-	\item 首先，滤波器方法在一定程度上假设了\textbf{马尔可夫性}，也就是$k$时刻的状态只与$k-1$时刻相关，而与$k-1$之前的状态和观测都无关（或者和前几个有限时刻的状态相关）。这有点像是在视觉里程计中只考虑相邻两帧关系一样。如果当前帧确实与很久之前的数据有关（例如回环），那么滤波器就会难以处理。
-
-	而非线性优化方法则倾向于使用所有的历史数据。它不光考虑邻近时刻的特征点与轨迹关系，更会把很久之前的状态也考虑进来，称为全体时间上的SLAM（Full-SLAM）。在这种意义下，非线性优化方法使用了更多信息，当然也需要更多的计算。
-	
-	\item 与第6讲介绍的优化方法相比，EKF滤波器仅在$\bm{\hat{x}}_{k-1}$处做了\textbf{一次}线性化，然后就直接根据这次线性化结果，把后验概率给算了出来。这相当于在说，我们认为\textbf{该点处的线性化近似在后验概率处仍然是有效的}。而实际上，当我们离开工作点较远时，一阶泰勒展开并不一定能够近似整个函数，这取决于运动模型和观测模型的非线性情况。如果它们有强烈的非线性，那么线性近似就只在很小范围内成立，不能认为在很远的地方仍能用线性来近似。这就是EKF的\textbf{非线性误差}，也是它的主要问题所在。
-
-	在优化问题中，尽管我们也做一阶（最速下降）或二阶（高斯牛顿法或列文伯格—马夸尔特方法）的近似，但每迭代一次，状态估计发生改变之后，我们会重新对新的估计点做泰勒展开，而不像EKF那样只在固定点上做一次泰勒展开。这就使得优化方法适用范围更广，在状态变化较大时亦能适用。所以大体来说，可以粗略地认为\textbf{EKF仅是优化当中的一次迭代}\footnote{更仔细地说，比一次迭代要好一些，因为更新步骤的线性化是在预测基础之上。如果在预测时刻就同时线性化运动和观测模型，就完全和一次迭代一样了。}。
-	
-	\item 从程序实现上来说，EKF需要存储状态量的均值和方差，并对它们进行维护和更新。如果把路标也放进状态，由于视觉SLAM中路标数量很大，这个存储量是相当可观的，且与状态量呈平方增长（因为要存储协方差矩阵）。因此，普遍认为EKF SLAM不适用于大型场景。
-	
-	\item 最后，EKF等滤波器方法没有异常检测机制，导致系统在存在异常值的时候很容易发散。而在视觉SLAM中，异常值却是很常见的：无论特征匹配还是光流法，都容易追踪或匹配到错误的点。没有异常值检测机制会让系统在实用中非常不稳定。
-\end{enumerate}
-
-由于EKF存在这些明显的缺点，我们通常认为，在同等计算量的情况下，非线性优化能取得更好的效果\textsuperscript{\cite{Strasdat2012}}。这里“更好”是指精度和鲁棒性同时达到更好的意思。下面我们来讨论以非线性优化为主的后端。我们将主要介绍图优化，并用g2o和Ceres演示一下后端优化。
-
-\section{BA与图优化}
-如果你做过视觉三维重建，那么应该对这个概念再熟悉不过了。所谓的Bundle Adjustment\footnote{也译为光束法平差、捆集调整等，但笔者觉得没有Bundle Adjustment这个英文来得直观，所以这里保留英文名称。}，是指从视觉图像中提炼出最优的3D模型和相机参数（内参数和外参数）。考虑从任意特征点发射出来的几束光线（bundles of light rays），它们会在几个相机的成像平面上变成像素或是检测到的特征点。如果我们调整（adjustment）各相机姿态和各特征点空间位置，使得这些光线最终收束到相机的光心\textsuperscript{\cite{Triggs2000}}，就称为BA。
-
-我们在第\ref{cpt:5}讲和第\ref{cpt:7}讲已经简单介绍过BA的原理，本节的重点是介绍它对应的图模型结构的特点，然后介绍一些通用的快速求解方法。
-
-\subsection{投影模型和BA代价函数}
-首先我们复习一下整个投影的过程。从一个世界坐标系中的点$\bm{p}$出发，把相机的内外参数和畸变都考虑进来，最后投影成像素坐标，需要如下步骤。
+What are the limitations of EKF?
 
 \begin{enumerate}
-	\item 首先，把世界坐标转换到相机坐标，这里将用到相机外参数$(\bm{R}, \bm{t})$：
-	\begin{equation}
-	\bm{P}' = \bm{R} \bm{p} + \bm{t} = [X', Y', Z']^\mathrm{T}.
-	\end{equation}
-	\item 然后，将$\bm{P}'$投至归一化平面，得到归一化坐标：
-	\begin{equation}
-	\bm{P}_c = [u_c, v_c, 1]^\mathrm{T} = [X'/Z', Y'/Z', 1]^\mathrm{T}.
-	\end{equation}
-	\item 考虑归一化坐标的畸变情况，得到去畸变前的原始像素坐标。
-这里暂时只考虑径向畸变：
-	\begin{equation}
-	\left\{
-	\begin{array}{l}
-	u_c' = {u_c}\left( {1 + {k_1}r_c^2 + {k_2}r_c^4} \right)\\
-	v_c' = {v_c}\left( {1 + {k_1}r_c^2 + {k_2}r_c^4} \right)
-	\end{array}
-	\right. .
-	\end{equation}
-	\item 最后，根据内参模型，计算像素坐标：
-	\begin{equation}
-	\left\{ \begin{array}{l}
-	{u_s} = {f_x}u_c' + {c_x}\\
-	{v_s} = {f_y}v_c' + {c_y} 
-	\end{array} \right. .
-	\end{equation}
+\item First, the filter method assumes \textbf{Markoviness} to some extent, that is, the state of $k$ is only related to the time of $k-1$, and the state before $k-1$ It has nothing to do with observations (or related to the state of the first few finite moments). This is a bit like thinking about the relationship between two adjacent frames in a visual odometer. If the current frame is indeed related to data from a long time ago (for example, loopback), the filter will be difficult to process.
+
+Non-linear optimization methods tend to use all historical data. It not only considers the relationship between feature points and trajectories in the vicinity, but also considers the state long before, called SLAM (Full-SLAM) in all time. In this sense, the nonlinear optimization method uses more information and of course requires more calculations.
+
+\item Compared with the optimization method introduced in the sixth lecture, the EKF filter only linearizes \textbf{once} at $\bm{\hat{x}}_{k-1}$, and then directly This linearization result calculates the posterior probability. This is equivalent to saying that we think that \textbf{the linearization approximation at this point is still valid at the posterior probability}. In fact, when we are away from the working point, the first-order Taylor expansion does not necessarily approximate the entire function, depending on the nonlinearity of the motion model and the observation model. If they have strong nonlinearities, then the linear approximation is only found in a small range, and it cannot be considered that it can be approximated by linearity at a great distance. This is the EKF's \textbf{non-linearity error} and its main problem.
+
+In the optimization problem, although we also do the first-order (slowest descent) or second-order (Gaussian Newton method or Levin Berg-Marquartt method) approximation, after each iteration, after the state estimation changes, we will Re-expanding Taylor to the new estimate, instead of doing a Taylor expansion at a fixed point like EKF. This makes the optimization method more applicable and can be applied when the state changes greatly. So in general, you can roughly think that \textbf{EKF is just an iteration in optimization}\footnote{More carefully, it is better than an iteration because the linearization of the update step is based on prediction. If you linearize the motion and observation models simultaneously at the time of prediction, it is exactly the same as an iteration. }.
+
+\item From a program implementation point of view, the EKF needs to store the mean and variance of the state quantities and maintain and update them. If the road sign is also put into the state, due to the large number of road signs in the visual SLAM, this amount of storage is considerable and squared with the state quantity (because the covariance matrix is ​​to be stored). Therefore, it is generally accepted that EKF SLAM is not suitable for large scenes.
+
+\item Finally, filter methods such as EKF have no anomaly detection mechanism, which causes the system to diverge easily when there are outliers. In visual SLAM, outliers are common: both feature matching and optical flow methods are easy to track or match to the wrong point. No outlier detection mechanism can make the system very unstable in practice.
 \end{enumerate}
 
-这一系列计算流程看似有些复杂。我们用流程\autoref{fig:calculationflow}~形象化地表示整个过程，以帮助读者理解。读者应该能领会到，这个过程也就是前面讲的\textbf{观测方程}，之前我们把它抽象地记成：
+Due to these obvious shortcomings of EKF, we generally believe that nonlinear optimization can achieve better results under the same amount of computation \textsuperscript{\cite{Strasdat2012}}. "Better" here means precision and robustness at the same time to achieve better meaning. Let's discuss the backend based on nonlinear optimization. We will mainly introduce graph optimization and demonstrate backend optimization with g2o and Ceres.
+
+\section{BA and graph optimization}
+If you have done a visual 3D reconstruction, you should be familiar with this concept. The so-called Bundle Adjustment\footnote{ is also translated into beam adjustment, bundle adjustment, etc., but I feel that there is no Bundle Adjustment in English, so the English name is reserved here. }, refers to the extraction of the optimal 3D model and camera parameters (internal and external parameters) from the visual image. Consider the bundles of light rays emitted from any feature point, which become pixels or detected feature points on the imaging plane of several cameras. If we adjust the camera pose and the spatial position of each feature point so that the light eventually reaches the camera's optical center \textsuperscript{\cite{Triggs2000}}, it is called BA.
+
+We have briefly introduced the principle of BA in the \ref{cpt:5} and \ref{cpt:7}. The focus of this section is to introduce the characteristics of its corresponding graph model structure, and then introduce some common fast Solution.
+
+\subsection{Projection model and BA cost function}
+First we review the entire projection process. Starting from the point $\bm{p}$ in a world coordinate system, taking into account the internal and external parameters and distortion of the camera, and finally projecting into pixel coordinates, the following steps are required.
+
+\begin{enumerate}
+\item First, convert the world coordinates to camera coordinates. Here you will use the extra camera parameter $(\bm{R}, \bm{t})$:
+\begin{equation}
+\bm{P}' = \bm{R} \bm{p} + \bm{t} = [X', Y', Z']^\mathrm{T}.
+\end{equation}
+\item Then, cast $\bm{P}'$ to the normalized plane to get the normalized coordinates:
+\begin{equation}
+\bm{P}_c = [u_c, v_c, 1]^\mathrm{T} = [X'/Z', Y'/Z', 1]^\mathrm{T}.
+\end{equation}
+\item Considers the distortion of the normalized coordinates and obtains the original pixel coordinates before dedistortion.
+For the time being, only radial distortion is considered:
+\begin{equation}
+\left\{
+\begin{array}{l}
+U_c' = {u_c}\left( {1 + {k_1}r_c^2 + {k_2}r_c^4} \right)\\
+V_c' = {v_c}\left( {1 + {k_1}r_c^2 + {k_2}r_c^4} \right)
+\end{array}
+\right. .
+\end{equation}
+\item Finally, calculate the pixel coordinates based on the internal parameter model:
+\begin{equation}
+\left\{ \begin{array}{l}
+{u_s} = {f_x}u_c' + {c_x}\\
+{v_s} = {f_y}v_c' + {c_y}
+\end{array} \right.
+\end{equation}
+\end{enumerate}
+
+This series of calculation processes may seem complicated. We use the process \autoref{fig:calculationflow}~ to visually represent the whole process to help the reader understand. The reader should be able to understand that this process is also the \textbf{observation equation} mentioned earlier. We previously wrote it abstractly as:
 \begin{equation}
 \bm{z} = h(\bm{x}, \bm{y}).
 \end{equation}
 
 \begin{figure}[!htp]
-	\centering
-	\includegraphics[width=1.0\textwidth]{backend1/calculationflow}
-	\caption{计算流程示意图。左侧的$\bm{p}$是全局坐标系下的三维坐标点，右侧的$u_s,v_s$是该点在图像平面上的最终像素坐标。中间畸变模块中的$r_c^2=u_c^2 + v_c^2$。}
-	\label{fig:calculationflow}
+\centering
+\includegraphics[width=1.0\textwidth]{backend1/calculationflow}
+\caption{Calculation process diagram. The $\bm{p}$ on the left is the 3D coordinate point in the global coordinate system, and the $u_s on the right, v_s$ is the final pixel coordinate of the point on the image plane. $r_c^2=u_c^2 + v_c^2$ in the middle distortion module. }
+\label{fig:calculationflow}
 \end{figure}
 
-现在，我们给出了它的详细参数化过程。具体地说，这里的$\bm{x}$指代此时相机的位姿，即外参$\bm{R}, \bm{t}$，它对应的李群为$\bm{T}$，李代数为$\bm{\xi}$。路标$\bm{y}$即这里的三维点$\bm{p}$，而观测数据则是像素坐标$\bm{z} \buildrel \Delta \over = [u_s, v_s]^T $。以最小二乘的角度来考虑，那么可以列写关于此次观测的误差：
+Now we give its detailed parameterization process. Specifically, $\bm{x}$ here refers to the pose of the camera at this time, that is, the external parameter $\bm{R}, \bm{t}$, which corresponds to the Li group as $\bm{T }$, Lie algebra is $\bm{\xi}$. The road sign $\bm{y}$ is the three-dimensional point $\bm{p}$, and the observation data is the pixel coordinates $\bm{z} \buildrel \Delta \over = [u_s, v_s]^T $. Considering the least squares angle, you can write the error about this observation:
 \begin{equation}
 \bm{e} = \bm{z} - h(\bm{T}, \bm{p}).
 \end{equation}
 
-然后，把其他时刻的观测量也考虑进来，我们可以给误差添加一个下标。设$\bm{z}_{ij}$为在位姿$\bm{T}_i$处观察路标$\bm{p}_j$产生的数据，那么整体的\textbf{代价函数}（Cost Function）为
+Then, taking into account the observations at other times, we can add a subscript to the error. Let $\bm{z}_{ij}$ be the data generated by observing the road sign $\bm{p}_j$ in the pose $\bm{T}_i$, then the overall \textbf{cost function} (Cost) Function) is
 \begin{equation}
 \label{eq:BAcostfunction}
 \frac{1}{2}\sum_{i=1}^m \sum_{j=1}^n \| \bm{e}_{ij} \|^2 = \frac{1}{2}\sum_{i=1}^m\sum_{j=1}^n \|
 \bm{{z}}_{ij} - h(\bm{T}_{i},\bm{p}_j) \|^2 .
 \end{equation}
 
-对这个最小二乘进行求解，相当于对位姿和路标同时做了调整，也就是所谓的BA。接下来，我们会根据该目标函数和第\ref{cpt:6}讲介绍的非线性优化内容，逐步深入探讨该模型的求解。
+Solving this least squares is equivalent to adjusting the pose and the road sign at the same time, which is called BA. Next, we will gradually explore the solution of the model based on the objective function and the nonlinear optimization content introduced in \ref{cpt:6}.
 
-\subsection{BA的求解}
-观察在上一节中的观测模型$h(\bm{T}, \bm{p})$，很容易判断该函数不是线性函数。所以我们希望使用\ref{sec:6.2}节介绍的一些非线性优化手段来优化它。根据非线性优化的思想，我们应该从某个初始值开始，不断地寻找下降方向$\Delta \bm{x}$来找到目标函数的最优解，即不断地求解增量方程\eqref{eq:minimize-deltax}中的增量$\Delta \bm{x}$。尽管误差项都是针对单个位姿和路标点的，但在整体BA目标函数上，我们应该把自变量定义成所有待优化的变量：
+\subsection{BA's solution}
+Observing the observation model $h(\bm{T}, \bm{p})$ in the previous section, it is easy to judge that the function is not a linear function. So we want to optimize it using some of the nonlinear optimizations introduced in the \ref{sec:6.2} section. According to the idea of ​​nonlinear optimization, we should start from a certain initial value and constantly search for the descending direction $\Delta \bm{x}$ to find the optimal solution of the objective function, that is, continuously solve the incremental equation \eqref{eq:minimize-deltax} The increment $\Delta \bm{x}$ in . Although the error term is for a single pose and landmark, on the overall BA objective function, we should define the argument as all variables to be optimized:
 \begin{equation}
 \bm{x} = [ \bm{T}_1, \ldots, \bm{T}_m, \bm{p}_1, \ldots, \bm{p}_n ]^\mathrm{T}.
 \end{equation}
 
-相应地，增量方程中的$\Delta \bm{x}$则是对整体自变量的增量。在这个意义下，当我们给自变量一个增量时，目标函数变为
+Accordingly, $\Delta \bm{x}$ in the incremental equation is an increment to the overall argument. In this sense, when we give an increment to the argument, the objective function becomes
 \begin{equation}
 \label{eq:tangentbundleindetail}
 \frac{1}{2}\left\Vert f(\bm{x} + \Delta \bm{x}) \right\Vert ^2 \approx \frac{1}{2}\sum_{i=1}^{m}\sum_{j=1}^n \left\Vert \bm{e}_{ij} + \bm{F}_{ij} \Delta \bm{\xi}_{i} + \bm{E}_{ij} \Delta \bm{p}_j \right\Vert^2 .
 \end{equation}
 
-其中$\bm{F}_{ij}$表示整个代价函数在当前状态下对相机姿态的偏导数，而$\bm{E}_{ij}$表示该函数对路标点位置的偏导。我们曾在~\ref{sec:BA-vo1}~节中介绍了它们的具体形式，所以这里就不再展开推导了。现在，把相机位姿变量放在一起：
+Where $\bm{F}_{ij}$ represents the partial derivative of the entire cost function to the camera pose in the current state, and $\bm{E}_{ij}$ represents the partial derivative of the function to the location of the landmark. We have introduced their specific forms in the ~\ref{sec:BA-vo1}~ section, so we will not start deriving here. Now put the camera pose variables together:
 \begin{equation}
 \bm{x}_c=[ \bm{\xi}_1, \bm{\xi}_2, \ldots, \bm{\xi}_m ]^\mathrm{T} \in \mathbb{R}^{6m},
 \end{equation}
-并把空间点的变量也放在一起：
+And put the variables of the space point together:
 \begin{equation}
 \bm{x}_p=[ \bm{p}_1, \bm{p}_2, \ldots , \bm{p}_n ]^\mathrm{T}\in \mathbb{R}^{3n},
 \end{equation}
-那么，式\eqref{eq:tangentbundleindetail}可以简化表达如下：
+Then, the formula \eqref{eq:tangentbundleindetail} can be simplified as follows:
 \begin{equation}
 \label{eq:BAleastsquare}
 \frac{1}{2}
-\left\Vert 
+\left\Vert
 f(\bm{x}+ \Delta \bm{x} )
 \right\Vert ^2 = 
 \frac{1}{2} 
@@ -367,17 +367,17 @@ f(\bm{x}+ \Delta \bm{x} )
 \right \Vert ^2 .
 \end{equation}
 
-需要注意的是，该式从一个由很多个小型二次项之和，变成了一个更整体的样子。这里的雅可比矩阵$\bm{E}$和$\bm{F}$必须是整体目标函数对整体变量的导数，它将是一个很大块的矩阵，而里头每个小分块，需要由每个误差项的导数$\bm{F}_{ij}$和$\bm{E}_{ij}$“拼凑”起来。然后，无论我们使用高斯牛顿法还是列文伯格—马夸尔特方法，最后都将面对增量线性方程：
+It should be noted that this formula changes from a sum of many small quadratic terms to a more holistic one. Here the Jacobian matrix $\bm{E}$ and $\bm{F}$ must be the derivative of the overall objective function to the global variable, it will be a large block matrix, and each small block inside, need The "$\bm{F}_{ij}$ and $\bm{E}_{ij}$ "spliced ​​together" for each error term. Then, whether we use the Gauss Newton method or the Levenberg-Marquart method, we will eventually face the incremental linear equation:
 \begin{equation}
 \bm{H} \Delta \bm{x} = \bm{g}.
 \end{equation}
 
-根据第\ref{cpt:6}讲的知识，我们知道高斯牛顿法和列文伯格—马夸尔特方法的主要差别在于，这里的$\bm{H}$是取$\bm{J}^\mathrm{T}\bm{J}$还是$\bm{J}^\mathrm{T}\bm{J}+ \lambda \bm{I}$的形式。由于我们把变量归类成了位姿和空间点两种，所以雅可比矩阵可以分块为
+According to the knowledge of \ref{cpt:6}, we know that the main difference between the Gauss Newton method and the Levenberg-Marquart method is that $\bm{H}$ is $\bm{J }^\mathrm{T}\bm{J}$ is still in the form of $\bm{J}^\mathrm{T}\bm{J}+ \lambda \bm{I}$. Since we classify variables into poses and spatial points, the Jacobian matrix can be divided into blocks.
 \begin{equation}
 \bm{J}=[\bm{F} \ \bm{E}].
 \end{equation}
 
-那么，以高斯牛顿法为例，则$\bm{H}$矩阵为
+Then, taking the Gauss-Newton method as an example, the $\bm{H}$ matrix is
 \begin{equation}\label{eq:HessianMatrix}
 \bm{H} = \bm{J}^\mathrm{T}\bm{J} =
 \begin{bmatrix}
@@ -386,12 +386,12 @@ f(\bm{x}+ \Delta \bm{x} )
 \end{bmatrix} .
 \end{equation}
 
-当然在列文伯格—马夸尔特方法中我们也需要计算这个矩阵。不难发现，因为考虑了所有的优化变量，这个线性方程的维度将非常大，包含了所有的相机位姿和路标点。尤其是在视觉SLAM中，一幅图像就会提出数百个特征点，大大增加了这个线性方程的规模。如果直接对$\bm{H}$求逆来计算增量方程，由于矩阵求逆是复杂度为$O(n^3)$的操作\textsuperscript{\cite{Sueli2003}}，这是非常消耗计算资源的。幸运的是，这里的$\bm{H}$矩阵是有一定的特殊结构的。利用这个特殊结构，我们可以加速求解过程。
+Of course, we also need to calculate this matrix in the Levenberg-Marquart method. It's not hard to find that because all the optimization variables are considered, the dimensions of this linear equation will be very large, including all camera poses and landmark points. Especially in visual SLAM, an image will present hundreds of feature points, greatly increasing the scale of this linear equation. If you calculate the incremental equation directly by inverting $\bm{H}$, since the matrix inversion is an operation of $O(n^3)$, \textsuperscript{\cite{Sueli2003}}, this is very expensive. Computing resources. Fortunately, the $\bm{H}$ matrix here has a certain special structure. With this special structure, we can speed up the solution process.
 
-\subsection{稀疏性和边缘化}
-21世纪视觉SLAM的一个重要进展是认识到了矩阵$\bm{H}$的稀疏结构，并发现该结构可以自然、显式地用图优化来表示\textsuperscript{\cite{Kummerle2011, Polok2013}}。本节将详细讨论一下该矩阵稀疏结构。
+\subsection{Sparseness and marginalization}
+An important development of the 21st century visual SLAM is the recognition of the sparse structure of the matrix $\bm{H}$, and found that the structure can naturally and explicitly use graph optimization to represent \textsuperscript{\cite{Kummerle2011, Polok2013}}. This section will discuss the matrix sparse structure in detail.
 
-$\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考虑这些代价函数当中的其中一个$\bm{e}_{ij}$。注意到，这个误差项只描述了在$\bm{T}_i$看到$\bm{p}_j$这件事，只涉及第$i$个相机位姿和第$j$个路标点，对其余部分的变量的导数都为0。所以该误差项对应的雅可比矩阵有下面的形式：
+The sparsity of the $\bm{H}$ matrix is ​​caused by the Jacobian matrix $\bm{J}(\bm{x})$. Consider one of these cost functions, $\bm{e}_{ij}$. Note that this error term only describes the $\bm{p}_j$ in $\bm{T}_i$, which only involves the $i$ camera pose and the $j$ landmark point. The derivative of the remaining variables is 0. Therefore, the Jacobian matrix corresponding to the error term has the following form:
 \begin{equation}
 \bm{J}_{ij}(\bm{x}) = \left(
 \bm{0}_{2 \times 6},...
@@ -406,13 +406,13 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \right) .
 \end{equation}
 
-其中$\bm{0}_{2 \times 6}$表示维度为$2 \times 6$的$\bm{0}$矩阵，同理$\bm{0}_{2 \times 3}$也是一样。该误差项对相机姿态的偏导${\partial \bm{e}_{ij}}/{\partial \bm{\xi}_i}$维度为$2 \times 6$，对路标点的偏导${\partial \bm{e}_{ij}}/{\partial \bm{p}_j}$维度是$2 \times 3$。这个误差项的雅可比矩阵，除了这两处为非零块之外，其余地方都为零。这体现了该误差项与其他路标和轨迹无关的特性。从图优化角度来说，这条观测边只和两个顶点有关。那么，它对增量方程有何影响？$\bm{H}$矩阵为什么会产生稀疏性呢？
+Where $\bm{0}_{2 \times 6}$ represents the $\bm{0}$ matrix with dimensions $2 \times 6$, and the same $\bm{0}_{2 \times 3}$ same. The bias term for the camera pose is ${\partial \bm{e}_{ij}}/{\partial \bm{\xi}_i}$ dimension is $2 \times 6$, partial guide to the landmark point The ${\partial \bm{e}_{ij}}/{\partial \bm{p}_j}$ dimension is $2 \times 3$. The Jacobian matrix of this error term is zero except that the two are non-zero blocks. This embodies the fact that the error term is independent of other road signs and tracks. From the perspective of graph optimization, this observation edge is only related to two vertices. So, what effect does it have on the incremental equation? Why does the $\bm{H}$ matrix produce sparsity?
 
-以\autoref{fig:sparse}~为例，我们设$\bm{J}_{ij}$只在$i,j$处有非零块，那么它对$\bm{H}$的贡献为$\bm{J}_{ij}^\mathrm{T} \bm{J}_{ij}$，具有图上所画的稀疏形式。这个$\bm{J}_{ij}^\mathrm{T} \bm{J}_{ij}$矩阵也仅有4个非零块，位于$(i,i), (i,j), (j,i), (j,j)$。对于整体的$\bm{H}$，有：
+Taking \autoref{fig:sparse}~ as an example, we set $\bm{J}_{ij}$ to have only non-zero blocks at $i,j$, then its contribution to $\bm{H}$ For $\bm{J}_{ij}^\mathrm{T} \bm{J}_{ij}$, it has the sparse form drawn on the graph. The $\bm{J}_{ij}^\mathrm{T} \bm{J}_{ij}$ matrix also has only 4 non-zero blocks, located at $(i,i), (i,j) , (j,i), (j,j)$. For the overall $\bm{H}$, there are:
 \begin{equation}
 \bm{H} = \sum_{i,j} \bm{J}_{ij}^\mathrm{T} \bm{J}_{ij},
 \end{equation}
-请注意$i$在所有相机位姿中取值，$j$在所有路标点中取值。我们把$\bm{H}$进行分块：
+Note that $i$ takes values ​​in all camera poses, and $j$ takes values ​​in all landmark points. We divide $\bm{H}$ into blocks:
 \begin{equation}
 \label{eq:H-blocks}
 \bm{H} = \left[ {\begin{array}{*{20}{c}}
@@ -422,29 +422,29 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \end{equation}
 
 \begin{figure}[!htp]
-	\centering
-	\includegraphics[width=1.0\textwidth]{backend1/sparse.pdf}
-	\caption{当某个误差项$\bm{J}$具有稀疏性时，它对$\bm{H}$的贡献也具有稀疏形式。}
-	\label{fig:sparse}
+\centering
+\includegraphics[width=1.0\textwidth]{backend1/sparse.pdf}
+\caption{When an error term $\bm{J}$ is sparse, its contribution to $\bm{H}$ is also sparse. }
+\label{fig:sparse}
 \end{figure}
 
-这里$\bm{H}_{11}$只和相机位姿有关，而$\bm{H}_{22}$只和路标点有关。当我们遍历$i,j$时，以下事实总是成立的：
+Here $\bm{H}_{11}$ is only related to the camera pose, and $\bm{H}_{22}$ is only related to the landmark points. When we traverse $i,j$, the following facts are always true:
 \begin{enumerate}
-	\item 不管$i,j$怎么变，$\bm{H}_{11}$都是对角阵，只在$\bm{H}_{i,i}$处有非零块。
-	\item 同理，$\bm{H}_{22}$也是对角阵，只在$\bm{H}_{j,j}$处有非零块。
-	\item 对于$\bm{H}_{12}$和$\bm{H}_{21}$，它们可能是稀疏的，也可能是稠密的，视具体的观测数据而定。
+\item No matter how $i, j$ changes, $\bm{H}_{11}$ is a diagonal matrix, with only non-zero blocks at $\bm{H}_{i,i}$.
+\item Similarly, $\bm{H}_{22}$ is also a diagonal array with only non-zero blocks at $\bm{H}_{j,j}$.
+\item For $\bm{H}_{12}$ and $\bm{H}_{21}$, they may be sparse or dense, depending on the specific observations.
 \end{enumerate}
 
-这显示了$\bm{H}$的稀疏结构。之后对线性方程的求解中，也正需要利用它的稀疏结构。也许读者还没有很好地领会这里的意思，我们举一个实例来直观说明它的情况。假设一个场景内有2个相机位姿（$C_1,C_2$）和6个路标（$P_1,P_2,P_3,P_4,P_5,P_6$）。这些相机和点云所对应的变量为$\bm{T}_i, i = 1,2$及$\bm{p}_j, j = 1,\cdots, 6$。相机$C_1$观测到路标$P_1,P_2,P_3,P_4$，相机$C_2$观测到路标$P_3,P_4,P_5,P_6$。我们把这个过程画成示意\autoref{fig:simplegraph}~。相机和路标以圆形节点表示。如果$i$相机能够观测到$j$点，我们就在它们对应的节点连上一条边。
+This shows the sparse structure of $\bm{H}$. Later, in solving the linear equation, it is also necessary to use its sparse structure. Perhaps the reader has not yet grasped the meaning of this, and we give an example to illustrate its situation. Suppose there are 2 camera poses ($C_1, C_2$) and 6 road signs ($P_1, P_2, P_3, P_4, P_5, P_6$) in a scene. The variables for these cameras and point clouds are $\bm{T}_i, i = 1,2$ and $\bm{p}_j, j = 1,\cdots, 6$. The camera $C_1$ observed the road signs $P_1, P_2, P_3, P_4$, and the camera $C_2$ observed the road signs $P_3, P_4, P_5, P_6$. We draw this process as a schematic \autoref{fig:simplegraph}~. Cameras and road signs are represented by circular nodes. If the $i$ camera is able to observe the $j$ point, we will connect an edge to their corresponding node.
 
 \begin{figure}[!htp]
-	\centering
-	\includegraphics[width=0.8\textwidth]{backend1/simplegraph.pdf}
-	\caption{点和边组成的示意图。该图显示相机$C_1$观测到了路标点$P_1,P_2,P_3,P_4$，相机$C_2$看到了$P_3$到$P_6$。}
-	\label{fig:simplegraph}
+\centering
+\includegraphics[width=0.8\textwidth]{backend1/simplegraph.pdf}
+\caption{A diagram of the composition of points and edges. The figure shows that the camera $C_1$ has observed the signposts $P_1, P_2, P_3, P_4$, and the camera $C_2$ has seen $P_3$ to $P_6$. }
+\label{fig:simplegraph}
 \end{figure}
 
-可以推出，场景下的BA目标函数应该是
+Can be launched, the BA target function under the scene should be
 \begin{equation}
 \frac{1}{2}\left( \left\Vert \bm{e}_{11} \right\Vert^2 + 
 \left\Vert \bm{e}_{12} \right\Vert^2 + 
@@ -457,7 +457,7 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \right).
 \end{equation}
 
-这里的$\bm{e}_{ij}$使用之前定义过的代价函数，即式\eqref{eq:BAcostfunction}。以$\bm{e}_{11}$为例，它描述了在$C_1$看到了$P_1$这件事，与其他的相机位姿和路标无关。令$\bm{J}_{11}$为$\bm{e}_{11}$所对应的雅可比矩阵，不难看出$\bm{e}_{11}$对相机变量$\bm{\xi}_2$和路标点$\bm{p}_2, \cdots, \bm{p}_6$的偏导都为0。我们把所有变量以$\bm{x} = \left( \bm{\xi}_1, \bm{\xi}_2, \bm{p}_1, \cdots, \bm{p}_2 \right)^\mathrm{T}$的顺序摆放，则有：
+Here $\bm{e}_{ij}$ uses the previously defined cost function, ie, \eqref{eq:BAcostfunction}. Take $\bm{e}_{11}$ as an example. It describes the $P_1$ seen in $C_1$, regardless of other camera poses and road signs. Let $\bm{J}_{11}$ be the Jacobian matrix for $\bm{e}_{11}$, it’s not hard to see that $\bm{e}_{11}$ is for the camera variable $\ The partial derivatives of bm{\xi}_2$ and the landmarks $\bm{p}_2, \cdots, \bm{p}_6$ are all zero. We put all variables as $\bm{x} = \left( \bm{\xi}_1, \bm{\xi}_2, \bm{p}_1, \cdots, \bm{p}_2 \right) The order of ^\mathrm{T}$ is placed, then:
 \begin{equation}
 \bm{J}_{11} = \frac{\partial \bm{e}_{11}}{\partial \bm{x}}
 = \left(
@@ -472,54 +472,54 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \right).
 \end{equation}
 
-为了方便表示稀疏性，我们用带有颜色的方块表示矩阵在该方块内有数值，其余没有颜色的区域表示矩阵在该处数值都为0。那么上面的$\bm{J}_{11}$则可以表示成\autoref{fig:jaobianrow}~所示图案。同理，其他的雅可比矩阵也会有类似的稀疏图案。
+In order to facilitate the representation of sparsity, we use a square with a color to indicate that the matrix has a value in the square, and the remaining areas without color indicate that the matrix has a value of zero at that point. Then the above $\bm{J}_{11}$ can be expressed as \autoref{fig:jaobianrow}~. Similarly, other Jacobian matrices will have similar sparse patterns.
 
 \begin{figure}[!t]
-	\centering
-	\includegraphics[width=0.8\textwidth]{backend1/Jacobianrow.pdf}
-	\caption{$\bm{J}_{11}$矩阵的非零块分布图。上方的标记表示矩阵该列所对应的变量。由于相机参数维数比点云参数维数要大，所以$C_1$对应的矩阵块要比$P_1$对应的矩阵块宽一些。}
-	\label{fig:jaobianrow}
+\centering
+\includegraphics[width=0.8\textwidth]{backend1/Jacobianrow.pdf}
+The non-zero block distribution of the \caption{$\bm{J}_{11}$ matrix. The upper mark indicates the variable corresponding to the column of the matrix. Since the camera parameter dimension is larger than the point cloud parameter dimension, the matrix block corresponding to $C_1$ is wider than the matrix block corresponding to $P_1$. }
+\label{fig:jaobianrow}
 \end{figure}
 
-为了得到该目标函数对应的雅可比矩阵，我们可以将这些$\bm{J}_{ij}$按照一定顺序列为向量，那么整体雅可比矩阵及相应的$\bm{H}$矩阵的稀疏情况就如\autoref{fig:simplematrix}~所示。
+In order to get the Jacobian matrix corresponding to the objective function, we can classify these $\bm{J}_{ij}$ as vectors in a certain order, then the overall Jacobian matrix and the corresponding $\bm{H}$ matrix The sparse situation is as shown in \autoref{fig:simplematrix}~.
 
 \begin{figure}[!t]
-	\centering
-	\includegraphics[width=1\textwidth]{backend1/simplematrix.pdf}
-	\caption{雅可比矩阵的稀疏性（左）和$\bm{H}$矩阵的稀疏性（右），填色的方块表示矩阵在对应的矩阵块处有数值，其余没有颜色的部分表示矩阵在该处的数值始终为0。}
-	\label{fig:simplematrix}
+\centering
+\includegraphics[width=1\textwidth]{backend1/simplematrix.pdf}
+\caption{Sparseness of the Jacobian matrix (left) and the sparsity of the $\bm{H}$ matrix (right). The filled squares indicate that the matrix has values ​​at the corresponding matrix block, and the remaining parts with no color represent the matrix. The value there is always 0. }
+\label{fig:simplematrix}
 \end{figure}
 
-也许你已经注意到了，\autoref{fig:simplegraph}~对应的\textbf{邻接矩阵}（Adjacency Matrix）\footnote{所谓邻接矩阵是这样一种矩阵，它的第$i,j$个元素描述了节点$i$和$j$是否存在一条边。如果存在此边，设这个元素为1，否则设为0。}和上图中的$\bm{H}$矩阵，除了对角元素以外的其余部分有着完全一致的结构。事实上的确如此。上面的$\bm{H}$矩阵一共有$8 \times 8$个矩阵块，对于$\bm{H}$矩阵当中处于非对角线的矩阵块来说，如果该矩阵块非零，则其位置所对应的变量之间在图中会存在一条边，我们可以从\autoref{fig:matrixandgraph}~中清晰地看到这一点。所以，$\bm{H}$矩阵当中的非对角部分的非零矩阵块可以理解为其对应的两个变量之间存在联系，或者可以称之为约束。于是，我们发现图优化结构与增量方程的稀疏性存在着明显的联系。
+Perhaps you have noticed that \autoref{fig:simplegraph}~ corresponds to \textbf{adjacency matrix}\footnote{the so-called adjacency matrix is ​​a matrix whose $i, j$ elements describe Whether there is an edge between nodes $i$ and $j$. If this edge exists, set this element to 1, otherwise set to 0. } and the $\bm{H}$ matrix in the above figure, except for the diagonal elements, have the same structure. In fact, it is. The above $\bm{H}$ matrix has a total of $8\times 8$ matrix blocks. For matrix blocks in the $\bm{H}$ matrix that are not diagonal, if the matrix block is non-zero, then There will be an edge between the variables corresponding to their position in the figure, we can clearly see this from \autoref{fig:matrixandgraph}~. Therefore, the non-zero matrix block of the non-diagonal portion of the $\bm{H}$ matrix can be understood as a relationship between its corresponding two variables, or can be called a constraint. Therefore, we find that there is a clear connection between the graph optimization structure and the sparseness of the incremental equation.
 
 \begin{figure}[!htp]
-	\centering
-	\includegraphics[width=1\textwidth]{backend1/matrixandgraph.pdf}
-	\caption{$\bm{H}$矩阵中非零矩阵块和图中边的对应关系。如左图$\bm{H}$矩阵中右侧的红色矩阵块，表示在右图中其对应的变量$C_2$和$P_6$之间存在一条边$\bm{e}_{26}$。}
-	\label{fig:matrixandgraph}
+\centering
+\includegraphics[width=1\textwidth]{backend1/matrixandgraph.pdf}
+\caption{$\bm{H}$ The correspondence between non-zero matrix blocks in the matrix and the edges in the graph. For example, the red matrix block on the right side of the $\bm{H}$ matrix on the left shows that there is an edge between the corresponding variables $C_2$ and $P_6$ in the right image. $\bm{e}_{26} $. }
+\label{fig:matrixandgraph}
 \end{figure}
 
-现在考虑更一般的情况，假如我们有$m$个相机位姿，$n$个路标点。由于通常路标的数量远远多于相机，于是有$n \gg m$。由上面的推理可知，实际的$\bm{H}$矩阵会如\autoref{fig:BigHmatrix}~所示。它的左上角块显得非常小，而右下角的对角块占据了大量地方。除此之外，非对角部分则分布着散乱的观测数据。由于它的形状很像箭头，又称为箭头形（Arrow-like）矩阵\textsuperscript{\cite{Barfoot2016}}。同时，它也很像一把镐子，所以笔者也称其为镐形矩阵\footnote{这是一个玩笑，请不要在正式的学术论文里这样写。}。
+Now consider the more general case, if we have $m$ camera pose, $n$ landmark points. Since there are usually more road signs than cameras, there is $n \gg m$. From the above reasoning, the actual $\bm{H}$ matrix will be as shown in \autoref{fig:BigHmatrix}~. Its upper left corner block is very small, while the diagonal corner block in the lower right corner occupies a lot of places. In addition to this, the non-diagonal parts are distributed with scattered observation data. Because it is shaped like an arrow, it is also called an arrow-like matrix \textsuperscript{\cite{Barfoot2016}}. At the same time, it is also very similar to a scorpion, so I also call it the 镐 matrix matrix \footnote{ This is a joke, please do not write in the formal academic paper. }.
 
 \begin{figure}[!ht]
-	\centering
-	\includegraphics[width=0.7\textwidth]{backend1/BigHmatrix.pdf}
-	\caption{一般情况下的$\bm{H}$矩阵。}
-	\label{fig:BigHmatrix}
+\centering
+\includegraphics[width=0.7\textwidth]{backend1/BigHmatrix.pdf}
+\caption{Generally $\bm{H}$ matrix. }
+\label{fig:BigHmatrix}
 \end{figure}
 
-对于具有这种稀疏结构的$\bm{H}$，线性方程$\bm{H} \Delta \bm{x}= \bm{g}$的求解会有什么不同呢？现实当中存在着若干种利用$\bm{H}$的稀疏性加速计算的方法，本节介绍视觉SLAM里一种最常用的手段：Schur消元。在SLAM研究中亦称为Marginalization（边缘化）。
+For $\bm{H}$ with this sparse structure, what is the difference between the linear equation $\bm{H} \Delta \bm{x}= \bm{g}$? There are several ways to use the sparse acceleration calculation of $\bm{H}$ in reality. This section introduces one of the most commonly used methods in visual SLAM: Schur elimination. Also known as Marginalization in SLAM research.
 
-仔细观察一下\autoref{fig:BigHmatrix}，我们不难发现这个矩阵可以分成4个块，和式\eqref{eq:H-blocks}一致。左上角为对角块矩阵，每个对角块元素的维度与相机位姿的维度相同，且是一个对角块矩阵。右下角也是对角块矩阵，每个对角块的维度是路标的维度。非对角块的结构与具体观测数据相关。我们首先将这个矩阵按照\autoref{fig:MatrixSegmentation}所示的方式做区域划分，读者不难发现，这4个区域正好对应了公式\eqref{eq:HessianMatrix}中的4个矩阵块。为了后续分析方便，我们记这4个块为$\bm{B}, \bm{E}, \bm{E}^\mathrm{T}, \bm{C}$。
+Looking closely at \autoref{fig:BigHmatrix}, we can easily see that this matrix can be divided into 4 blocks, which is consistent with the formula \eqref{eq:H-blocks}. The upper left corner is a diagonal block matrix, and the dimensions of each diagonal block element are the same as the dimensions of the camera pose, and are a diagonal block matrix. The lower right corner is also a diagonal block matrix, and the dimension of each diagonal block is the dimension of the road sign. The structure of the non-diagonal block is related to the specific observation data. We first divide the matrix into regions according to the way shown in \autoref{fig:MatrixSegmentation}. It is not difficult for the reader to find that the four regions correspond to the four matrix blocks in the formula \eqref{eq:HessianMatrix}. For the convenience of subsequent analysis, we remember that these 4 blocks are $\bm{B}, \bm{E}, \bm{E}^\mathrm{T}, \bm{C}$.
 
 \begin{figure}[!ht]
-	\centering
-	\includegraphics[width=0.5\textwidth]{backend1/MatrixSegmentation.pdf}
-	\caption{$\bm{H}$矩阵的区域划分。}
-	\label{fig:MatrixSegmentation}
+\centering
+\includegraphics[width=0.5\textwidth]{backend1/MatrixSegmentation.pdf}
+\caption{$\bm{H}$ The division of the matrix. }
+\label{fig:MatrixSegmentation}
 \end{figure}
 
-于是，对应的线性方程组也可以由$\bm{H\Delta x} = \bm{g}$变为如下形式：
+Thus, the corresponding linear system of equations can also be changed from $\bm{H\Delta x} = \bm{g}$ to the following form:
 \begin{equation}
 \label{eq:linearequations}
  \left[ \begin{matrix}
@@ -536,7 +536,7 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \end{array} \right].
 \end{equation}
 
-其中$\bm{B}$是对角块矩阵，每个对角块的维度和相机参数的维度相同，对角块的个数是相机变量的个数。由于路标数量会远远大于相机变量个数，所以$\bm{C}$往往也远大于$\bm{B}$。三维空间中每个路标点为三维，于是$\bm{C}$矩阵为对角块矩阵，每个块为$3 \times 3$矩阵。对角块矩阵求逆的难度远小于对一般矩阵的求逆难度，因为我们只需要对那些对角线矩阵块分别求逆即可。考虑到这个特性，我们对线性方程组进行高斯消元，目标是消去右上角的非对角部分$\bm{E}$，得：
+Where $\bm{B}$ is a diagonal block matrix, the dimensions of each diagonal block are the same as the dimensions of the camera parameters, and the number of diagonal blocks is the number of camera variables. Since the number of road signs is much larger than the number of camera variables, $\bm{C}$ is often much larger than $\bm{B}$. Each landmark in 3D space is three-dimensional, so the $\bm{C}$ matrix is ​​a diagonal block matrix, and each block is a $3 \times 3$ matrix. The difficulty of inverting the diagonal block matrix is ​​much less difficult than the inverse of the general matrix, because we only need to invert the diagonal matrix blocks separately. Considering this property, we perform Gaussian elimination on the linear equations. The goal is to eliminate the non-diagonal part of the upper right corner, $\bm{E}$, to get:
 \begin{equation}\label{eq:guasselimination}
 \left[ \begin{matrix}
 \bm{I}   &    -\bm{EC^{-1}} \\
@@ -561,7 +561,7 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \end{array} \right]  .
 \end{equation}
 
-整理，得：
+Finishing, get:
 \begin{equation}
 \left[ \begin{matrix}
 \bm{B} - \bm{E}\bm{C}^{-1}\bm{E}^\mathrm{T}	& 	\bm{0} \\
@@ -577,7 +577,7 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \end{array}\right].
 \end{equation}
 
-经过消元之后，方程组第一行变成和$\Delta \bm{x}_p$无关的项。单独把它拿出来，得到关于位姿部分的增量方程：
+After the elimination, the first line of the equation becomes an item unrelated to $\Delta \bm{x}_p$. Take it out alone and get the incremental equation for the pose part:
 \begin{equation}\label{eq:marginalization}
 \left[ 
 \bm{B} - \bm{E}\bm{C}^{-1}\bm{E}^\mathrm{T}
@@ -586,54 +586,54 @@ $\bm{H}$矩阵的稀疏性是由雅可比矩阵$\bm{J}(\bm{x})$引起的。考�
 \bm{v} - \bm{E}\bm{C}^{-1}\bm{w} .
 \end{equation}
 
-这个线性方程的维度和$\bm{B}$矩阵一样。我们的做法是先求解这个方程，然后把解得的$\Delta \bm{x}_c$代入到原方程，然后求解$\Delta \bm{x}_p$。这个过程称为\textbf{Marginalization}\textsuperscript{\cite{Sibley2010}}，或者\textbf{Schur消元}（Schur Elimination）。相比于直接解线性方程的做法，它的优势在于：
+The dimensions of this linear equation are the same as the $\bm{B}$ matrix. Our approach is to solve this equation first, then substitute the solved $\Delta \bm{x}_c$ into the original equation, and then solve $\Delta \bm{x}_p$. This process is called \textbf{Marginalization}\textsuperscript{\cite{Sibley2010}}, or \textbf{Schur Elimination}. Compared to the direct solution of linear equations, its advantages are:
 
 \begin{enumerate}
-	\item 在消元过程中，由于$\bm{C}$为对角块，所以$\bm{C}^{-1}$容易解出。
-	\item 求解了$\Delta \bm{x}_c$之后，路标部分的增量方程由$\Delta \bm{x}_p = \bm{C}^{-1} (\bm{w} - \bm{E}^\mathrm{T} \Delta \bm{x}_c)$给出。这依然用到了$\bm{C}^{-1}$易于求解的特性。
+\item In the elimination process, since $\bm{C}$ is a diagonal block, $\bm{C}^{-1}$ is easy to solve.
+After \item solves $\Delta \bm{x}_c$, the incremental equation for the road sign portion is $\Delta \bm{x}_p = \bm{C}^{-1} (\bm{w} - \bm{E}^\mathrm{T} \Delta \bm{x}_c)$ is given. This still uses the features of $\bm{C}^{-1}$ that are easy to solve.
 \end{enumerate}
 
-于是，边缘化的主要计算量在于求解式\eqref{eq:marginalization}。关于这个方程，我们能说的就不多了。它仅是一个普通的线性方程，没有特殊的结构可以利用。我们将此方程的系数记为$\bm{S}$，它的稀疏性如何呢？\autoref{fig:marginalization}显示了进行Schur消元之后的一个$\bm{S}$实例，可以看到它的稀疏性是不规则的。
+Thus, the main computational amount of marginalization lies in the solution \eqref{eq:marginalization}. There is not much we can say about this equation. It is just an ordinary linear equation and no special structure can be utilized. Let's write the coefficient of this equation as $\bm{S}$. How is it sparse? \autoref{fig:marginalization} shows a $\bm{S}$ instance after the Schur elimination, and it can be seen that its sparsity is irregular.
 
 \begin{figure}[!ht]
-	\centering
-	\includegraphics[width=0.5\textwidth]{backend1/marginalization.pdf}
-	\caption{对$\bm{H}$矩阵进行Schur消元后$\bm{S}$矩阵的稀疏状态。}
-	\label{fig:marginalization}
+\centering
+\includegraphics[width=0.5\textwidth]{backend1/marginalization.pdf}
+\caption{The sparse state of the $\bm{S}$ matrix after the Schur elimination of the $\bm{H}$ matrix. }
+\label{fig:marginalization}
 \end{figure}
 
-前面说到，$\bm{H}$矩阵的非对角块处的非零元素对应着相机和路标的关联。那么，进行了Schur消元后$\bm{S}$的稀疏性是否具有物理意义呢？答案是肯定的。此处我们不加证明地说，$\bm{S}$矩阵的非对角线上的非零矩阵块，表示了该处对应的两个相机变量之间存在着共同观测的路标点，有时候称为共视（Co-visibility）。反之，如果该块为零，则表示这两个相机没有共同观测。例如\autoref{fig:marginalizationanalysis}~所示的稀疏矩阵，左上角前$4 \times 4$个矩阵块可以表示对应的相机变量$C_1,C_2,C_3,C_4$之间有共同观测。
+As mentioned earlier, the non-zero elements at the non-diagonal blocks of the $\bm{H}$ matrix correspond to the association of the camera and the landmark. So, does the sparsity of $\bm{S}$ after Schur elimination have physical meaning? The answer is yes. Here we do not prove that the non-zero matrix block on the off-diagonal line of the $\bm{S}$ matrix indicates that there are common observations between the two camera variables. It is called Co-visibility. Conversely, if the block is zero, it means that the two cameras are not observed together. For example, the sparse matrix shown by \autoref{fig:marginalizationanalysis}~, the top left $4 \times 4$ matrix blocks can indicate that the corresponding camera variables $C_1, C_2, C_3, C_4$ have common observations.
 
 \begin{figure}[!htp]
-	\centering
-	\includegraphics[width=0.8\textwidth]{backend1/marginalizationanalysis.pdf}
-	\caption{以$\bm{S}$矩阵中前$4 \times 4$个矩阵块为例，这个区域当中的矩阵块$\bm{S}_{14}, \bm{S}_{24}$不为零，表示相机$C_4$和相机$C_1$、$C_2$之间有共同观测点；而$S_{34}$为零则表示$C_3$和$C_4$之间没有共同观测的路标。}
-	\label{fig:marginalizationanalysis}
+\centering
+\includegraphics[width=0.8\textwidth]{backend1/marginalizationanalysis.pdf}
+\caption{ Take the $4 \times 4$ matrix block in the $\bm{S}$ matrix as an example. The matrix block in this area is $\bm{S}_{14}, \bm{S}_{24 }$ is not zero, indicating that there is a common observation point between the camera $C_4$ and the camera $C_1$, $C_2$; and $S_{34}$ is zero, indicating that there is no common observation between $C_3$ and $C_4$. Road sign. }
+\label{fig:marginalizationanalysis}
 \end{figure}
 \clearpage
-于是，$\bm{S}$矩阵的稀疏性结构当取决于实际观测的结果，我们无法提前预知。在实践当中，例如ORB-SLAM\textsuperscript{\cite{Mur-Artal2015}}中的Local Mapping 环节，在做BA的时候刻意选择那些具有共同观测的帧作为关键帧，在这种情况下Schur消元后得到的$\bm{S}$就是稠密矩阵。不过，由于这个模块并不是实时执行，所以这种做法也是可以接受的。但是在另一些方法里面，例如DSO\textsuperscript{\cite{Engel2016}}、OKVIS\textsuperscript{\cite{Leutenegger2015}}等，它们采用了滑动窗口方法（Sliding Window）。这类方法对每一帧都要求做一次BA来防止误差的累积，因此它们也必须采用一些技巧来保持$\bm{S}$矩阵的稀疏性。读者如果希望能够更加深入这一块，可以参考它们的论文。这里就不谈这些过于细节的事情了。
+Thus, the sparse structure of the $\bm{S}$ matrix depends on the actual observations, and we cannot predict in advance. In practice, for example, the Local Mapping link in ORB-SLAM\textsuperscript{\cite{Mur-Artal2015}} deliberately selects frames with common observations as key frames when doing BA, in which case Schur eliminates The resulting $\bm{S}$ is a dense matrix. However, since this module is not executed in real time, this is acceptable. But in other methods, such as DSO\textsuperscript{\cite{Engel2016}}, OKVIS\textsuperscript{\cite{Leutenegger2015}}, etc., they use the sliding window method (Sliding Window). This type of method requires a BA for each frame to prevent the accumulation of errors, so they must also use some techniques to maintain the sparsity of the $\bm{S}$ matrix. Readers who want to be able to go deeper into this piece can refer to their papers. I won't talk about these details in detail here.
 
-从概率角度来看，我们称这一步为边缘化，是因为我们实际上把求$(\Delta \bm{x}_c, \Delta \bm{x}_p)$的问题，转化成了先固定$\Delta \bm{x}_p$，求出$\Delta \bm{x}_c$，再求$\Delta \bm{x}_p$的过程。这一步相当于做了条件概率展开：
+From a probabilistic point of view, we call this step marginal because we actually turn the problem of $(\Delta \bm{x}_c, \Delta \bm{x}_p)$ into a fixed one. $\Delta \bm{x}_p$, find $\Delta \bm{x}_c$, and then ask for $\Delta \bm{x}_p$. This step is equivalent to doing a conditional probability expansion:
 \begin{equation}
 P( \bm{x}_c, \bm{x}_p ) = P(\bm{x}_c | \bm{x}_p ) P( \bm{x}_p ) ,
 \end{equation}
 
-结果是求出了关于$\bm{x}_p$的边缘分布，故称边缘化。在前面讲的边缘化过程中，我们实际把所有的路标点都给边缘化了。根据实际情况，我们也能选择一部分进行边缘化。同时，Schur消元只是实现边缘化的其中一种方式，同样可以使用Cholesky分解进行边缘化。
+The result is the edge distribution for $\bm{x}_p$, so it is called marginalization. In the marginalization process we talked about earlier, we actually marginalized all the landmark points. According to the actual situation, we can also choose a part to be marginalized. At the same time, Schur elimination is only one way to achieve marginalization, and can also be marginalized using Cholesky decomposition.
 
-读者可能会继续问，在进行了Schur消元后，我们还需要求解线性方程组\eqref{eq:marginalization}。对它的求解是否还有什么技巧呢？很遗憾，这部分就属于传统的矩阵数值求解了，通常是用分解来计算的。不管采用哪种求解办法，我们都建议利用$\bm{H}$的稀疏性进行Schur消元。不光是因为这样可以提高速度，也因为消元后的$\bm{S}$矩阵的条件数往往比之前的$\bm{H}$矩阵要小。Schur消元也并不意味着将所有路标消元，将相机变量消元也是SLAM当中采用的手段。
+The reader may continue to ask, after the Schur elimination, we also need to solve the linear equations \eqref{eq:marginalization}. Is there any trick to solve it? Unfortunately, this part is a traditional matrix numerical solution, usually calculated by decomposition. Regardless of which solution is used, we recommend Schur elimination using the sparsity of $\bm{H}$. Not only does this increase speed, but also because the conditional cost of the $\bm{S}$ matrix after the elimination is often smaller than the previous $\bm{H}$ matrix. Schur elimination does not mean that all road signs are eliminated. The elimination of camera variables is also the means used in SLAM.
 
-%\subsection{稀疏线性方程组求解}
-%在进行了Schur消元后，我们还需要求解线性方程组\eqref{eq:marginalization}。我们将这个式子简写成公式\eqref{eq:reducedBundleAdjustment}。其中$\bm{S}$是维数为$mc \times mc$的半正定对称矩阵，$\bm{p}$是维数为$mc \times 1$维的向量。
+%\subsection{Sparse linear equations solution}
+% After the Schur elimination, we also need to solve the linear equations \eqref{eq:marginalization}. We abbreviate this formula into the formula \eqref{eq:reducedBundleAdjustment}. Where $\bm{S}$ is a semi-positive symmetric matrix with a dimension of $mc \times mc$, and $\bm{p}$ is a vector with a dimension of $mc \times 1$.
 %
 %\begin{equation}\label{eq:reducedBundleAdjustment}
 %\bm{S}\Delta \bm{x}_c = \bm{p}
 %\end{equation}
 %
-%读者也许会觉得此处很简单，对$\bm{S}$求逆或者违逆就可以得到这个方程的解\eqref{eq:reducedBundleAdjustment}，这么做理论上的确可以，但是如果你仔细思考一下也会发现，尽管我们这里得到的$\bm{S}$矩阵相比之前的$\bm{H}$来说已经大幅度缩小了维度，但求逆(或者违逆)依然是个计算量非常大的计算。其实不光是SLAM，其余领域的工程计算也很少会去用求逆(或者伪逆)这类思路去解决。
+% readers may think that this is very simple. If you reverse or violate $\bm{S}$, you can get the solution of this equation \eqref{eq:reducedBundleAdjustment}. This is theoretically possible, but if you think carefully We will also find that although the $\bm{S}$ matrix we get here has greatly reduced the dimension compared to the previous $\bm{H}$, the inversion (or violation) is still a calculation. Very large calculations. In fact, not only SLAM, but also the engineering calculations in other areas will rarely be solved by the idea of ​​inversion (or pseudo-reverse).
 %
-%由于解决线性方程组的方法五花八门，这里并不会将它们拿出来一一介绍。通常在一般情况下，求解线性方程组的方式是LU分解，但在这里，由于我们的$\bm{S}$矩阵是对称的半正定矩阵，可以采用更快速的手段来做。在SLAM或者SFM当中，常见的方法包括Cholesky分解或者$LDL^T$分解。其中Cholesky用来分解正定矩阵，$LDL^T$用来分解对称矩阵，因此这两者的选择主要是看$\bm{S}$矩阵所具有的特点。由于在SLAM里我们通常会让$\bm{S}$矩阵正定，我们接下来会对正定矩阵情况下采用的Cholesky分解方法重点介绍。你也许会好奇为何矩阵的分解会加速这个线性方程组的求解，因此在这之前，我们先回顾一下针对三角矩阵的线性方程组求解方法：
+% Because the methods for solving linear equations are varied, they are not taken out here. Usually, in general, the way to solve linear equations is LU decomposition, but here, since our $\bm{S}$ matrix is ​​a symmetric semi-definite matrix, we can do it faster. Among SLAM or SFM, common methods include Cholesky decomposition or $LDL^T$ decomposition. Cholesky is used to decompose the positive definite matrix, and $LDL^T$ is used to decompose the symmetric matrix. Therefore, the choice between the two is mainly to look at the characteristics of the $\bm{S}$ matrix. Since we usually make the $\bm{S}$ matrix positive in SLAM, we will focus on the Cholesky decomposition method used in the case of positive definite matrices. You may wonder why the decomposition of the matrix accelerates the solution of this linear equation, so before we do that, let's review the solution to the linear equations for the triangular matrix:
 %
-%假设$\bm{L}$矩阵是维度为$n \times n$的下三角矩阵，并且对角线上的元素非零。$\bm{b}$是维度为$n \times 1$的向量,那么线性方程组$\bm{Lx=b}$展开可以得到下面形式：
+% assumes that the $\bm{L}$ matrix is ​​a lower triangular matrix with dimensions nn \times n$ and the elements on the diagonal are non-zero. $\bm{b}$ is a vector with dimensions $n \times 1$, then the linear equations $\bm{Lx=b}$ expands to get the following form:
 %$$\begin{array}{*{20}{c}}
 %\begin{array}{l}
 %{L_{11}}{x_1}\\
@@ -650,122 +650,122 @@ P( \bm{x}_c, \bm{x}_p ) = P(\bm{x}_c | \bm{x}_p ) P( \bm{x}_p ) ,
 %\end{array}
 %\end{array}	$$
 %
-%此时，我们可以从第一行直接求出$x_1$，接着代入第二行${L_{21}}{x_1} + {L_{22}}{x_2} $求出$x_2$，依次类推可以得到最后的$x_n$。整个过程从$x_1$一直求出$x_n$，这个过程被称之为\textbf{顺向代入}(forward substitution)。其伪代码可以如下表示：
+% At this point, we can find $x_1$ directly from the first line, then substitute the second line ${L_{21}}{x_1} + {L_{22}}{x_2} $ to find $x_2$, in turn The analogy can get the last $x_n$. The whole process finds $x_n$ from $x_1$, which is called \textbf{forward substitution}. Its pseudo code can be expressed as follows:
 %
 %\begin{algorithm}[h]
-%	\caption{(顺向代入法)}
-%	\label{alg:forwardsubstitution}
-%	\begin{algorithmic}[1]
-%		\REQUIRE
-%		$\bm{L}$: 实数下三角矩阵，对角线元素非零;
-%		$\bm{b}$: 实数向量；
-%		$n$: $\bm{L}$的维度;
-%		\FOR{$i=1$ to $n$ }
-%		
-%		\STATE $x_i = (b_i - \sum_{k=0}^{i-1}{L_{ik}x_k})/L_{ii}$;
-%		
-%		\ENDFOR
-%		
-%		\RETURN
-%		$\bm{x}$
-%	\end{algorithmic}
+% \caption{(forward substitution method)}
+% \label{alg:forwardsubstitution}
+% \begin{algorithmic}[1]
+% \REQUIRE
+% $\bm{L}$: The triangle under the real number, the diagonal element is non-zero;
+% $\bm{b}$: real number vector;
+% $n$: The dimension of $\bm{L}$;
+% \FOR{$i=1$ to $n$ }
+%
+% \STATE $x_i = (b_i - \sum_{k=0}^{i-1}{L_{ik}x_k})/L_{ii}$;
+%
+% \ENDFOR
+%
+% \RETURN
+% $\bm{x}$
+% \end{algorithmic}
 %\end{algorithm}
 %
-%当然，当$\bm{L}$为一个上三角矩阵的时候，则对应的代入顺序则是先求出最后一项$x_n$，然后一直代入最后求出$x_1$。这个过程被成为\textbf{逆向代入法}(back substitution)。对应的伪代码则如下：
+% Of course, when $\bm{L}$ is an upper triangular matrix, the corresponding substitution order is to first find the last item $x_n$, and then enter the last to find $x_1$. This process is called \textbf{back substitution. The corresponding pseudo code is as follows:
 %
 %\begin{algorithm}[h]
-%	\caption{(逆向代入法)}
-%	\label{alg:backsubstitution}
-%	\begin{algorithmic}[1]
-%		\REQUIRE
-%		$\bm{L}$: 实数下三角矩阵，对角线元素非零;
-%		$\bm{b}$: 实数向量；
-%		$n$: $\bm{L}$的维度;
-%		\FOR{$i=n$ to $1$ }
-%		
-%		\STATE $x_i = (b_i - \sum_{k=i}^{n}{L_{ik}x_k})/L_{ii}$;
-%		
-%		\ENDFOR
-%		
-%		\RETURN
-%		$\bm{x}$
-%	\end{algorithmic}
+% \caption{(reverse substitution method)}
+% \label{alg:backsubstitution}
+% \begin{algorithmic}[1]
+% \REQUIRE
+% $\bm{L}$: The triangle under the real number, the diagonal element is non-zero;
+% $\bm{b}$: real number vector;
+% $n$: The dimension of $\bm{L}$;
+% \FOR{$i=n$ to $1$ }
+%
+% \STATE $x_i = (b_i - \sum_{k=i}^{n}{L_{ik}x_k})/L_{ii}$;
+%
+% \ENDFOR
+%
+% \RETURN
+% $\bm{x}$
+% \end{algorithmic}
 %\end{algorithm}
 %
-%基于三角矩阵的这类优秀特性，在解决线性方程组的时候先将其分解为三角矩阵是常用的求解方法之一。我们要介绍的Cholesky分解是将一个正定矩阵$\bm{S}$分解为$\bm{S} = \bm{L}\bm{L^T}$的形式，当$\bm{L}$矩阵对角线元素为正数的时候，分解结果具有唯一性。Cholesky分解的操作也非常简单，即从对角线元素开始，依次将对角线元素下方的每一列递推完成：
+% is based on such excellent characteristics of the triangular matrix. Decomposing it into a triangular matrix is ​​one of the commonly used solving methods when solving linear equations. The Cholesky decomposition we are going to introduce is a form of decomposing a positive definite matrix $\bm{S}$ into $\bm{S} = \bm{L}\bm{L^T}$, when $\bm{L} When the matrix diagonal element is a positive number, the decomposition result is unique. The Cholesky decomposition is also very simple, starting with the diagonal elements and recursively reorganizing each column below the diagonal elements:
 %
 %\begin{algorithm}[h]
-%	\caption{(Cholesky 分解)}
-%	\label{alg:CholeskyDecomposition}
-%	\begin{algorithmic}[1]
-%		\REQUIRE
-%		$\bm{S}$: 实数正定矩阵;
-%		$n$: 正定矩阵$\bm{S}$的维度;
-%		\FOR{$j=1$ to $n$}
-%		
-%		\STATE $\bm{L}_{jj} = \sqrt{\bm{S}_{jj} - \sum_{k=1}^{j-1}{L_{jk}^2}}$;
-%		
-%		\FOR{$i=j+1$ to $n$}
-%		\STATE $\bm{L}_{ij} = \frac{1}{\bm{L}_{jj}}(\bm{S}_{ij} - \sum_{k=1}^{j-1}{\bm{L}_{ik}\bm{L}_{jk}})$;
-%		\ENDFOR
-%		
-%		\ENDFOR
-%		\RETURN
-%		$\bm{L}$ 
-%	\end{algorithmic}
+% \caption{(Cholesky decomposition)}
+% \label{alg:CholeskyDecomposition}
+% \begin{algorithmic}[1]
+% \REQUIRE
+% $\bm{S}$: real positive definite matrix;
+% $n$: The dimension of the positive definite matrix $\bm{S}$;
+% \FOR{$j=1$ to $n$}
+%
+% \STATE $\bm{L}_{jj} = \sqrt{\bm{S}_{jj} - \sum_{k=1}^{j-1}{L_{jk}^2}}$ ;
+%
+% \FOR{$i=j+1$ to $n$}
+% \STATE $\bm{L}_{ij} = \frac{1}{\bm{L}_{jj}}(\bm{S}_{ij} - \sum_{k=1}^{ J-1}{\bm{L}_{ik}\bm{L}_{jk}})$;
+% \ENDFOR
+%
+% \ENDFOR
+% \RETURN
+% $\bm{L}$
+% \end{algorithmic}
 %\end{algorithm}
 %
-%容易看出，该算法的复杂度为$O(n^3)$，其中$n$为矩阵的维度。在对\eqref{eq:reducedBundleAdjustment}进行了Cholesky分解之后，我们需要求解的线性方程组则变成了$\bm{LL^T}\Delta \bm{x}_c = \bm{p}$。为了充分利用三角矩阵求解带来的便利，我们将$\bm{L^T} \Delta \bm{x}_c$ 这个向量记作$\bm{y}$。这样一来，我们可以首先求解$\bm{Ly=b}$来得到$\bm{y}$，接着再次借助三角矩阵求解带来的便利来求$\bm{L^T} \Delta \bm{x}_c = \bm{y}$，从而得到最终的$\Delta \bm{x}_c $。这样我们不难总结出，使用Cholesky分解求解线性方程组的流程大致如下:
+% It is easy to see that the complexity of the algorithm is $O(n^3)$, where $n$ is the dimension of the matrix. After the Cholesky decomposition of \eqref{eq:reducedBundleAdjustment}, the linear equations we need to solve become $\bm{LL^T}\Delta \bm{x}_c = \bm{p}$. To take full advantage of the convenience of triangular matrix solving, we denote the vector $\bm{L^T} \Delta \bm{x}_c$ as $\bm{y}$. In this way, we can first solve $\bm{Ly=b}$ to get $\bm{y}$, and then use the convenience of the triangle matrix solution to find $\bm{L^T} \Delta \ Bm{x}_c = \bm{y}$ to get the final $\Delta \bm{x}_c $. So we can easily conclude that the process of solving linear equations using Cholesky decomposition is as follows:
 %
 %\begin{algorithm}[h]
-%	\caption{(Cholesky 分解求解线性方程组)}
-%	\label{alg:CholeskyLinearsolver}
-%	\begin{algorithmic}[1]
-%		\REQUIRE
-%		$\bm{S}$: 实数正定矩阵
-%		$n$: 正定矩阵$\bm{S}$的维度
-%		$\bm{b}$: 维数为$n \times 1$的实数向量
-%		\STATE 使用(\ref{alg:CholeskyDecomposition})将矩阵$\bm{S}$进行Cholesky分解，得到其对应的下三角矩阵$\bm{L}$;
-%		
-%		\STATE 使用顺向代入法(\ref{alg:forwardsubstitution})求解线性方程组$\bm{Ly = b}$，得到向量$\bm{y}$;
-%		
-%		\STATE 使用逆向代入法(\ref{alg:backsubstitution})求解线性方程组$\bm{L^Tx = y}$，得到向量$\bm{x}$;
-%	
-%		\RETURN
-%		$\bm{x}$ 
-%	\end{algorithmic}
+% \caption{(Cholesky decomposition solves linear equations)}
+% \label{alg:CholeskyLinearsolver}
+% \begin{algorithmic}[1]
+% \REQUIRE
+% $\bm{S}$: real positive definite matrix
+% $n$: dimension of positive definite matrix $\bm{S}$
+% $\bm{b}$: real number vector with dimension n$times\1$
+% \STATE uses (\ref{alg:CholeskyDecomposition}) to perform Cholesky decomposition on the matrix $\bm{S}$ to obtain its corresponding lower triangular matrix $\bm{L}$;
+%
+% \STATE uses the forward substitution method (\ref{alg:forwardsubstitution}) to solve the linear equations $\bm{Ly = b}$ and get the vector $\bm{y}$;
+%
+% \STATE uses the inverse substitution method (\ref{alg:backsubstitution}) to solve the linear equations $\bm{L^Tx = y}$ and get the vector $\bm{x}$;
+%
+% \RETURN
+% $\bm{x}$
+% \end{algorithmic}
 %\end{algorithm}
 %
-%对于半正定的矩阵来说，通常的做法就是在加上一个比较小的对角矩阵，然后让其可逆。当然我们还需要考虑一类情况，那就是$\bm{S}$矩阵为稀疏矩阵的时候，这就会涉及到稀疏矩阵线性方程组的求解问题。稀疏性会给SLAM提供很大的便利，不光是从算法速度上，还是从算法占用的内存空间上。稀疏矩阵的存储有很多种，其中最简单的就是仅仅只保存非零元素所在的行列以及自身的数值，最后放在一个Hash表里进行管理。但稀疏矩阵的数据结构会根据算法所需进行定制。
+% For semi-positive matrices, the usual practice is to add a smaller diagonal matrix and then make it reversible. Of course, we also need to consider a kind of situation, that is, when the $\bm{S}$ matrix is ​​a sparse matrix, this will involve solving the problem of sparse matrix linear equations. Sparseness provides great convenience to SLAM, not only from the speed of the algorithm, but also from the memory space occupied by the algorithm. There are many kinds of storage of sparse matrices, the simplest of which is to save only the ranks of non-zero elements and their own values, and finally put them in a Hash table for management. However, the data structure of the sparse matrix will be customized according to the algorithm.
 %
-%好在这些底层的数学内容，现有的很多算法库都已经做的挺完整，比如CHOLMOD\cite{chen2008algorithm}，CSparse\cite{davis2005csparse}这类高效的Cholesky分解算法库已经用在广泛的工业界和学术界，连著名的软件MATLAB也是调用的它，也有Suitsparse\cite{davis2014suitesparse}这类算法库集成了针对稀疏矩阵的各种分解的高效算法，因此绝大多数人都可以忽略这些理论上的细节，选择去熟悉这些算法库的调用也是可取的。
+% is good at these low-level mathematical content, many existing algorithm libraries have been done quite well, such as CHOLMOD\cite{chen2008algorithm}, CSparse\cite{davis2005csparse}, such efficient Cholesky decomposition algorithm library has been used in a wide range of industries. In the world of circles and academia, even the famous software MATLAB is called. It also has an algorithmic library such as Suitsparse\cite{davis2014suitesparse} that integrates efficient algorithms for various decompositions of sparse matrices, so most people can ignore these theories. For details, it is advisable to choose to be familiar with the calls to these algorithm libraries.
 %
-%但为了方便读者熟悉各类SLAM的前沿理论研究，笔者还是得对稀疏矩阵进行简要的描述。在研究稀疏矩阵的分解操作时，有个概念叫做\textbf{填充}(fill-in)。这个概念指的是在稀疏矩阵原本为0的位置当中，其中某些位置在其分解后变成了带有数值的元素。比如下面对我们对箭头型矩阵直接进行Cholesky分解，就会出现\autoref{fig:ArrowMatrix}这样的情况。我们可以发现，再进行了Cholesky分解后，箭头矩阵那些原本为零的地方几乎全被\textbf{填充}了。
+% However, in order to facilitate the reader's familiarity with the frontier theoretical research of various SLAMs, the author still has to briefly describe the sparse matrix. When studying the decomposition operation of a sparse matrix, there is a concept called \textbf{fill-in}. This concept refers to the fact that in the position where the sparse matrix is ​​originally 0, some of the positions become elements with values ​​after they are decomposed. For example, if we directly perform Cholesky decomposition on the arrow type matrix, we will see the case of \autoref{fig:ArrowMatrix}. We can see that after the Cholesky decomposition, the arrow matrix is ​​almost completely filled with \textbf{.
 %
 %\begin{figure}[!htp]
-%	\centering
-%	\includegraphics[width=0.8\textwidth]{backend1/arrowMatrix.pdf}
-%	\caption{箭头矩阵(左)和其对应的Cholesky分解矩阵(右)，Cholesky分解将原本稀疏的矩阵变成了稠密矩阵}
-%	\label{fig:ArrowMatrix}
+% \centering
+% \includegraphics[width=0.8\textwidth]{backend1/arrowMatrix.pdf}
+% \caption{arrow matrix (left) and its corresponding Cholesky decomposition matrix (right), Cholesky decomposition turns the original sparse matrix into a dense matrix}
+% \label{fig:ArrowMatrix}
 %\end{figure}
 %
-%由于我们对矩阵进行Cholesky分解的目的是为了求解线性方程组$\bm{Sx=p}$，我们可以改变向量$\bm{x}$当中的元素顺序，这种改变也只是需要对$\bm{S}$当中的非零成员出现的位置，不需要对$\bm{S}$进行重新计算。比如针对\autoref{fig:ArrowMatrix}的箭头矩阵所对应的线性系统$\bm{Sx=p}$来说，我们将整个$\bm{x}$当中所有变量的顺序颠倒，那么其对应的$\bm{S}$矩阵以及它的Cholesky分解就会出现\autoref{fig:ArrowMatrixPermute}这样的情况，Cholesky分解后依然是个稀疏矩阵，甚至连稀疏的图案都和原矩阵一模一样。
+% Since our Cholesky decomposition of the matrix is ​​to solve the linear equations $\bm{Sx=p}$, we can change the order of the elements in the vector $\bm{x}$. This change only needs to be $ The location of non-zero members in \bm{S}$ does not require recalculation of $\bm{S}$. For example, for the linear system $\bm{Sx=p}$ corresponding to the arrow matrix of \autoref{fig:ArrowMatrix}, we reverse the order of all variables in the entire $\bm{x}$, then the corresponding The $\bm{S}$ matrix and its Cholesky decomposition will appear as \autoref{fig:ArrowMatrixPermute}. Cholesky is still a sparse matrix after decomposition, and even the sparse pattern is exactly the same as the original matrix.
 %
 %\begin{figure}[!htp]
-%	\centering
-%	\includegraphics[width=0.8\textwidth]{backend1/arrowMatrixPermute.pdf}
-%	\caption{调换顺序箭头矩阵(左)和其对应的Cholesky分解矩阵(右)，Cholesky分解后依然是稀疏矩阵，并且和原矩阵具有一模一样的稀疏形式。}
-%	\label{fig:ArrowMatrixPermute}
+% \centering
+% \includegraphics[width=0.8\textwidth]{backend1/arrowMatrixPermute.pdf}
+% \caption{Change the order arrow matrix (left) and its corresponding Cholesky decomposition matrix (right), Cholesky is still sparse matrix after decomposition, and has the same sparse form as the original matrix. }
+% \label{fig:ArrowMatrixPermute}
 %\end{figure}
 %
-%显而易见，这样被排序后不但丝毫不影响线性方程组的求解，甚至我们在做后面的正向或者逆向代入法的时候，由于分解保持了稀疏性可以节约大量的乘法和加法运算从而提高了计算效率。同时，更具有吸引力的是，我们依然可以用原来稀疏矩阵的数据结构保存这个Cholesky分解后的矩阵，我们也不需要开辟新的存储空间，直接在原有的数据结构上不断计算和覆盖即可。如果是排序前\eqref{fig:ArrowMatrix}那类情况就太糟糕了，我们不仅需要更多的内存空间来保存这个矩阵，同时也需要更换这个矩阵的数据结构(用Hash表这类对付稀疏矩阵的数据结构来保存稠密矩阵将是个复杂低效的方法)。由此在对稀疏矩阵进行线性方程组求解之前，为了更加高效我们最好先使用\textbf{排序}(ordering)这类操作来尽可能避免过多的填充现象。
+% is obvious, so that after sorting, it does not affect the solution of the linear equations at all, even when we do the backward or reverse substitution method, because the decomposition maintains the sparsity, it can save a lot of multiplication and addition operations and thus improve the calculation. effectiveness. At the same time, it is more attractive that we can still save the Cholesky-decomposed matrix with the original sparse matrix data structure. We don't need to open up new storage space, and we can continuously calculate and cover it directly on the original data structure. . If it is pre-sorting \eqref{fig:ArrowMatrix}, it is too bad. We need not only more memory space to save the matrix, but also need to replace the data structure of this matrix (using a hash table to deal with sparse matrices). The data structure to preserve dense matrices would be a complex and inefficient method). Therefore, in order to solve the linear equations of the sparse matrix, in order to be more efficient, we should first use the \textbf{ordering] operation to avoid excessive filling as much as possible.
 %
-%至于这类减少填充的排序的算法，由于种类及其繁多，读者可以参考\cite{agarwal2012variable}。其中非常具有影响力的是EMD算法(Exact Minimum Degree)，该算法针对矩阵对应的图不断地选取具有\textbf{最小度}(Degree)的节点而得到该矩阵对应的顺序。但值得说明的是，这种排序算法都是\textbf{NP难}问题(NP-complete，即在多项式时间内无法保证解决的问题)。正是因为如此，这里我也需要提醒读者，并不是所有排序都能使得整个线性系统变得更加快速。因此，为了真正保证有加速的作用，建议读者还是运行比较一下两者的运行时间从而进行选择。
+% As for this kind of algorithm for reducing the sorting of padding, readers can refer to \cite{agarwal2012variable} due to its variety and variety. One of the most influential is the EMD algorithm (Exact Minimum Degree), which continuously selects nodes with \textbf{Degree} for the corresponding graph of the matrix to obtain the order corresponding to the matrix. However, it is worth noting that this sorting algorithm is a \textbf{NPDiff} problem (NP-complete, which is a problem that cannot be guaranteed in polynomial time). Because of this, I also need to remind readers that not all sorts can make the entire linear system faster. Therefore, in order to truly ensure the acceleration, it is recommended that the reader still run the comparison of the running time of the two to make a choice.
 %
-%\subsection{QR分解求解Bundle Adjustment }
-%Bundle Adjustment的解决方法也不止我们上面详细介绍的这一种，例如我们接下来将简单地介绍一类方法可以避免解算$\bm{H}$矩阵，直接通过QR分解来求解最小二乘方程\eqref{eq:BAleastsquare}。
+%\subsection{QR解解解Bundle Adjustment }
+The solution to %Bundle Adjustment is not limited to the one we introduced above. For example, we will briefly introduce a class of methods to avoid solving the $\bm{H}$ matrix and solve the least squares directly by QR decomposition. Equation \eqref{eq:BAleastsquare}.
 %
-%QR分解是将矩阵分解为单位正交矩阵$\bm{Q}$和上三角矩阵$\bm{R}$的操作，即$\bm{J=QR}$。QR分解的方法也有很多，例如给定旋转(Given Rotation)，Householder 变换，Gram-Schmidt正交化等，这里不一一介绍，具体可以参考\cite{golub2012matrix}。QR分解当中一个非常重要的定理，就是当$\bm{J}$的维度是$m \times n, (m \ge n)$，且列满秩矩阵的时候，矩阵$\bm{J}$的QR分解为如下形式：
+The %QR decomposition is an operation that decomposes the matrix into a unit orthogonal matrix $\bm{Q}$ and an upper triangular matrix $\bm{R}$, ie $\bm{J=QR}$. QR分解的方法也有很多，例如给定旋转(Given Rotation)，Householder 变换，Gram-Schmidt正交化等，这里不一一介绍，具体可以参考\cite{golub2012matrix}。 QR分解当中一个非常重要的定理，就是当$\bm{J}$的维度是$m \times n, (m \ge n)$，且列满秩矩阵的时候，矩阵$\bm{J}$的QR分解为如下形式：
 %
 %\begin{displaymath}
 %\bm{J=QR} = \left( {{{\bm{Q}}_1},{{\bm{Q}}_2}} \right)\left( {\begin{array}{*{20}{c}}
@@ -807,12 +807,12 @@ P( \bm{x}_c, \bm{x}_p ) = P(\bm{x}_c | \bm{x}_p ) P( \bm{x}_p ) ,
 %
 %线性系统的稳定性是实战中不可忽略的分析部分，因为由于处理器精度的限制(例如双精度浮点数只有16位有效数字，则精度的数量级是$10^{-16}$)，有的低端处理器又只能让你使用单精度浮点数，因此任何情况下我们对矩阵的计算都存在截断误差。这种截断误差对矩阵的影响，可以说是对矩阵的一种\textbf{扰动}，我们并不希望这类扰动对最后的求解结果带来太大影响。具体的分析需要用到矩阵的\textbf{条件数}(Condition number)，这又是一些复杂的数学内容，我推荐希望深入的读者参考书籍\cite{golub2012matrix}。但需要我们记住的是，相比前面提到的Cholesky分解而言，QR分解是个速度慢但是数值上更稳定的选择。
 
-\subsection{鲁棒核函数}
-在前面的BA问题中，我们最小化误差项的二范数平方和作为目标函数。这种做法虽然很直观，但存在一个严重的问题：如果出于误匹配等原因，某个误差项给的数据是错误的，会发生什么呢？我们把一条原本不应该加到图中的边给加进去了，然而优化算法并不能辨别出这是个错误数据，它会把所有的数据都当作误差来处理。这个数据在算法看来，是观测到了一次很小概率看到的数据。这时，在图优化中会有一条误差很大的边，它的梯度也很大，意味着调整与它相关的变量会使目标函数下降更多。所以，算法将试图优先调整这条边所连接的节点的估计值，使它们顺应这条边的无理要求。由于这条边的误差真的很大，往往会抹平了其他正确边的影响，使优化算法专注于调整一个错误的值。这显然不是我们希望看到的。
+\subsection{Robust kernel function}
+In the previous BA problem, we minimize the sum of the squares of the two norms of the error term as the objective function. Although this method is very intuitive, there is a serious problem: If the data given by an error item is wrong for reasons such as mismatching, what will happen? We add an edge that should not be added to the graph. However, the optimization algorithm does not recognize that this is an erroneous data. It treats all data as errors. This data, in the opinion of the algorithm, is observed with a small probability of seeing the data. At this point, there will be a very large margin in the graph optimization, and its gradient is also large, meaning that adjusting the variables associated with it will cause the objective function to drop more. Therefore, the algorithm will attempt to prioritize the estimates of the nodes to which this edge is connected, so that they conform to the unreasonable requirements of this edge. Since the error on this side is really large, it tends to smooth out the effects of other correct edges, allowing the optimization algorithm to focus on adjusting an incorrect value. This is obviously not what we want to see.
 
-出现这种问题的原因是，当误差很大时，二范数增长得太快。于是就有了核函数的存在。核函数保证每条边的误差不会大得没边而掩盖掉其他的边。具体的方式是，把原先误差的二范数度量替换成一个增长没有那么快的函数，同时保证自己的光滑性质（不然无法求导！）。因为它们使得整个优化结果更为稳健，所以又叫它们鲁棒核函数（Robust Kernel）。
+The reason for this problem is that the two norms grow too fast when the error is large. Then there is the existence of a nuclear function. The kernel function guarantees that the error on each side will not be too large to cover up the other edges. The specific way is to replace the two norm metric of the original error with a function that does not grow so fast, while at the same time guaranteeing its own smooth nature (otherwise it can't be derived!). Because they make the whole optimization result more robust, they are also called Robust Kernel.
 
-鲁棒核函数有许多种，例如最常用的Huber核：
+There are many types of robust kernel functions, such as the most commonly used Huber kernel:
 \begin{equation}
 H\left( e \right) = 
 \left\{ 
@@ -822,38 +822,38 @@ H\left( e \right) =
 \end{array} \right.
 \end{equation}
 
-我们看到，当误差$e$大于某个阈值$\delta$后，函数增长由二次形式变成了一次形式，相当于限制了梯度的最大值。同时，Huber核函数又是光滑的，可以很方便地求导。\autoref{fig:huber}~显示了Huber核函数与二次函数的对比，可见在误差较大时Huber核函数增长明显低于二次函数。
+We see that when the error $e$ is greater than a certain threshold of $\delta$, the function growth changes from a quadratic form to a form, which is equivalent to limiting the maximum value of the gradient. At the same time, the Huber kernel function is smooth and can be easily derived. \autoref{fig:huber}~ shows the comparison between the Huber kernel function and the quadratic function. It can be seen that the Huber kernel function grows significantly lower than the quadratic function when the error is large.
 
 \begin{figure}[!htp]
-	\centering
-	\includegraphics[width=0.5\textwidth]{backend1/huberloss}
-	\caption{Huber核函数。}
-	\label{fig:huber}
+\centering
+\includegraphics[width=0.5\textwidth]{backend1/huberloss}
+\caption{Huber kernel function. }
+\label{fig:huber}
 \end{figure}
 
-除了Huber核之外，还有Cauchy核、Tukey核，等等，读者可以看看g2o和Ceres都提供了哪些核函数。
+In addition to the Huber core, there are Cauchy kernels, Tukey cores, etc. Readers can see which kernel functions are provided by both g2o and Ceres.
 
 \subsection{小结}
-本节我们重点介绍了BA中的稀疏性问题。不过，实践当中，多数软件库已经为我们实现了细节操作，而我们需要做的主要是构造Bundle Adjustment问题，设置Schur消元，然后调用稠密或者稀疏矩阵求解器对变量进行优化即可。如果读者希望更深入地了解BA，可以在阅读完本节的基础上，进一步参考文献\cite{Triggs2000}学习。
+In this section we focus on sparsity issues in BA. However, in practice, most software libraries have implemented detailed operations for us, and what we need to do is mainly to construct the Bundle Adjustment problem, set the Schur elimination, and then call the dense or sparse matrix solver to optimize the variables. If you want to know more about BA, you can read the \cite{Triggs2000} reference on the basis of reading this section.
 
-下面的两节，我们将使用Ceres和g2o两个库来做Bundle Adjustment。为了体现出它们的区别，我们会使用一个公开数据集BAL\textsubscript{\cite{bundleadjustmentinlarge}}，并使用共用的读写代码。
+In the next two sections, we will use the two libraries of Ceres and g2o to do the Bundle Adjustment. In order to reflect their differences, we will use a public data set BAL\textsubscript{\cite{bundleadjustmentinlarge}} and use the shared read and write code.
 
-\section{实践：Ceres BA}
-\subsection{BAL数据集}
-我们用BAL数据集进行BA的演示实验。BAL数据集提供若干个场景，每一个场景里的相机和路标点信息由一个文本文件给定。在本例中，使用problem-16-22106-pre.txt这个文件作为例子。该文件的以行的方式存储BA问题的信息，详细格式见 。我们用common.h中定义的BALProblem类读入该文件的内容，然后分别用Ceres和g2o求解。
+\section{Practice: Ceres BA}
+\subsection{BALDataset}
+We used the BAL data set for the demonstration of BA. The BAL data set provides several scenes, and the camera and landmark information in each scene is given by a text file. In this example, use the file problem-16-22106-pre.txt as an example. The file stores the information of the BA problem in a row. See the detailed format. We read the contents of the file using the BALProblem class defined in common.h and then solve it with Ceres and g2o respectively.
 
-需要注意的是，BAL这个数据集有它一些特殊之处：
+It should be noted that the BAL data set has some special features:
 \begin{enumerate}
-\item BAL的相机内参模型由焦距$f$和畸变参数$k_1,k_2$给出。$f$类似于我们提到的$f_x$和$f_y$。由于照片像素基本上是正方形，所以很多实际场合中$f_x$非常接近$f_y$，用同一个值也未尝不可。此外，这个模型中没有$c_x,c_y$，因为存储的数据已经去掉了这两个值。
-\item BAL数据在投影时假设投影平面在相机光心之后，所以按照我们之前用的模型计算的话，需要在投影之后乘以系数$-1$。不过，大部分数据集仍使用光心前面的投影平面，我们在使用数据集之前应该仔细阅读格式说明。
+    \item The camera internal parameter model of  BAL is given by the focal length $f$ and the distortion parameters $k_1, k_2$. $f$ is similar to the $f_x$ and $f_y$ we mentioned. Since the photo pixels are basically square, in many practical situations $f_x$ is very close to $f_y$, and it is not a bad idea to use the same value. In addition, there is no $c_x, c_y$ in this model, because the stored data has already removed these two values.
+    \item The BAL data is projected with the projection plane behind the camera's optical center, so we need to multiply the coefficient by $-1$ after projection, as calculated by our previous model. However, most datasets still use the projection plane in front of the optical center, and we should read the format specification carefully before using the dataset.
 \end{enumerate}
 
-用BALProblem类读取数据之后，我们可以调用Normalize函数对原始数据进行归一化，或通过Perturb函数给数据加上噪声。归一化是指将所有路标点的中心置零，然后做一个合适尺度的缩放。这会使优化过程中数值更加稳定一些，防止在极端情况下处理很大或者有很大偏移的BA问题。
+After reading the data with the BALProblem class, we can call the Normalize function to normalize the original data, or add noise to the data through the Perturb function. Normalization refers to zeroing the center of all landmark points and then scaling them to a suitable scale. This will make the values ​​more stable during the optimization process, preventing BA problems that are large or have large offsets in extreme cases.
 
-请读者自行阅读BALProblem类的其他接口。由于这些代码只负责读写数据等外围功能，为节省篇幅，我们不在正文中给出。在解出BA之后，我们还可以用该类的函数将结果写入一个ply文件（一种点云文件格式），然后用meshlab软件进行查看。meshlab可以通过apt-get安装，在此不赘述安装方式。
+Readers are advised to read the other interfaces of the BALProblem class. Since these codes are only responsible for reading and writing peripheral functions such as data, we don't give them in the text to save space. After solving the BA, we can also use the function of this class to write the result to a ply file (a point cloud file format), and then use the meshlab software to view. Meshlab can be installed by apt-get, and the installation method will not be described here.
 
-\subsection{Ceres BA的书写}
-在bundle\_adjustment\_ceres.cpp文件中，我们实现了Ceres求解BA的过程。用Ceres的关键是定义出投影误差模型，该部分代码在SnavelyReprojectionError.h中给出：
+\subsection{Ceres BA Writing}
+In the bundle\_adjustment\_ceres.cpp file, we implemented the process of Ceres solving BA. The key to using Ceres is to define the projection error model, which is given in SnavelyReprojectionError.h:
 
 \begin{lstlisting}[language=c++, caption=slambook2/ch9/SnavelyReprojectionError.cpp（片段）]
 class SnavelyReprojectionError {
@@ -918,9 +918,10 @@ private:
 	double observed_y;
 };
 \end{lstlisting}
-该类的括号运算符实现了Ceres计算误差的接口，实际的计算在CamProjectionWithDistortion函数中。注意在Ceres中，我们必须以double数组形式存储优化变量。现在每个相机一共有6维的姿态、1维焦距和2维畸变参数，共9维参数来描述，我们在实际存储中也必须按照这个顺序来存。该类的静态函数Create作为外部调用接口，直接返回一个可自动求导的Ceres代价函数。我们只要调用Create函数，把代价函数放入ceres::Problem即可。
+The parentheses operator of this class implements the interface for Ceres calculation error, and the actual calculation is in the CamProjectionWithDistortion function. Note that in Ceres, we must store the optimization variables as a double array. Now each camera has a total of 6-dimensional pose, 1D focal length and 2D distortion parameters, which are described by a total of 9-dimensional parameters. We must also store them in this order in actual storage. The static function Create of this class acts as an external call interface and directly returns a Ceres cost function that can be automatically derived. We just call the Create function and put the cost function into ceres::Problem.
 
-接下来我们实现BA搭建和求解的部分：
+Next we implement the part of BA building and solving:：
+
 \begin{lstlisting}[language=c++, caption=slambook2/ch9/SnavelyReprojectionError.cpp（片段）]
 void SolveBA(BALProblem &bal_problem) {
 	const int point_block_size = bal_problem.point_block_size();
@@ -954,6 +955,12 @@ void SolveBA(BALProblem &bal_problem) {
 		problem.AddResidualBlock(cost_function, loss_function, camera, point);
 	}
 
+// Observations is 2 * num_observations long array observations
+// [u_1, u_2, ... u_n], where each u_i is two dimensional, the x
+// and y position of the observation.
+Const double *observations = bal_problem.observations();
+Ceres::Problem problem;
+
 	std::cout << "Solving ceres BA ... " << endl;
 	ceres::Solver::Options options;
 	options.linear_solver_type = ceres::LinearSolverType::SPARSE_SCHUR;
@@ -963,11 +970,11 @@ void SolveBA(BALProblem &bal_problem) {
 	std::cout << summary.FullReport() << "\n";
 }
 \end{lstlisting}
-可见问题搭建部分是相当简单的。如果要添加别的代价函数，整个流程也不会有太大的变化。最后，在ceres::Solver::Options中，我们可以设定求解的方法。使用SPARSE\_SCHUR会让Ceres实际求解的过程和我们前面描述的一致，即先对路标部分进行Schur边缘化，以加速的方式求解此问题。不过，在Ceres中我们不能控制哪部分变量被边缘化，这是由Ceres求解器自动寻找并计算的。
+Visible problem building part is quite simple. If you want to add another cost function, the whole process will not change much. Finally, in ceres::Solver::Options, we can set the solution method. The use of SPARSE\_SCHUR will allow Ceres to actually solve the same process as we described earlier, that is, Schur marginalization of the road sign portion to solve this problem in an accelerated manner. However, in Ceres we can't control which parts of the variable are marginalized, which is automatically found and calculated by the Ceres solver.
 
-Ceres的BA求解输出如下：
-\begin{lstlisting}[language=sh,caption=终端输出]
-./build/bundle_adjustment_ceres  problem-16-22106-pre.txt                
+Ceres' BA solution output is as follows:
+\begin{lstlisting}[language=sh,caption=terminal output]
+./build/bundle_adjustment_ceres problem-16-22106-pre.txt
 Header: 16 22106 83718bal problem file loaded...
 bal problem have 16 cameras and 22106 points. 
 Forming 83718 observations. 
@@ -979,11 +986,11 @@ iter      cost      cost_change  |gradient|   |step|    tr_ratio  tr_radius  ls_
 3  1.581483e+04    4.27e+04    4.98e+05   4.98e+02   1.29e+00  2.70e+05        1    1.51e-01    7.10e-01
 ......
 \end{lstlisting}
-总体误差应该随着迭代次数的增长而不断下降。最后，我们将优化前和优化后的点云输出为initial.ply和final.ply，用meshlab可以直接打开这两个点云。结果图如\autoref{fig:g2o-BA}所示。
+The overall error should continue to decrease as the number of iterations increases. Finally, we will optimize the pre-optimized and optimized point cloud output as initial.ply and final.ply, and use meshlab to open these two point clouds directly. The resulting graph is shown in \autoref{fig:g2o-BA}.
 
-\section{实践：g2o求解BA}
-下面来考虑如何使用g2o求解这个BA问题。和以前一样，g2o使用图模型来描述问题的结构，所以我们要用节点来表示相机和路标，然后用边来表示它们之间的观测。我们仍然使用自定义的点和边，只需覆盖一些关键函数即可。针对相机和路标，我们可以定义如下结构体，并使用override关键字来表示对基类虚函数的覆盖：
-\begin{lstlisting}[language=c++,caption=slambook2/ch9/bundle_adjustment_g2o.cpp（片段）]
+\section{Practice: g2o solves BA}
+Let's consider how to solve this BA problem using g2o. As before, g2o uses a graph model to describe the structure of the problem, so we use nodes to represent the camera and road signs, and then use edges to represent the observations between them. We still use custom points and edges, just cover some key functions. For cameras and road signs, we can define the following structure and use the override keyword to represent the coverage of the base class virtual function:
+\begin{lstlisting}[language=c++,caption=slambook2/ch9/bundle_adjustment_g2o.cpp(fragment)]
 /// 姿态和内参的结构
 struct PoseAndIntrinsics {
 	PoseAndIntrinsics() {}
@@ -1085,8 +1092,8 @@ public:
 };
 \end{lstlisting}
 
-我们把旋转、平移、焦距和畸变参数定义在同一个相机顶点中，然后定义相机到路标点之间的观测边。这里我们没有实现边的雅可比计算函数，这样g2o会自动提供一个数值计算的雅可比。最后，再按照BAL中的数据，将g2o的优化问题搭建起来即可：
-\begin{lstlisting}[language=c++,caption=slambook2/ch9/bundle_adjustment_g2o.cpp（片段）]
+We define the rotation, translation, focus, and distortion parameters in the same camera vertex, and then define the observation edge between the camera and the landmark. Here we do not implement the edge Jacobian calculation function, so g2o will automatically provide a numerical calculation of Jacobian. Finally, according to the data in the BAL, the g2o optimization problem can be built up:
+\begin{lstlisting}[language=c++,caption=slambook2/ch9/bundle_adjustment_g2o.cpp(fragment)]
 void SolveBA(BALProblem &bal_problem) {
 	const int point_block_size = bal_problem.point_block_size();
 	const int camera_block_size = bal_problem.camera_block_size();
@@ -1156,8 +1163,8 @@ void SolveBA(BALProblem &bal_problem) {
 }
 \end{lstlisting}
 
-以上定义了本问题中使用的节点和边。下面需要根据BALProblem类当中的实际数据来生成一些节点和边，交给g2o进行优化。值得注意的是，为了充分利用BA中的稀疏性，需要在这里将路标中的setMarginalized属性设置为true。代码的主要片段如下：
-\begin{lstlisting}[language=c++,caption=slambook2/ch9/bundle_adjustment_g2o（片段）]
+The above defines the nodes and edges used in this question. Next, we need to generate some nodes and edges based on the actual data in the BALProblem class, and give them to g2o for optimization. It's worth noting that in order to take full advantage of the sparsity in BA, you need to set the setMarginalized property in the roadmap to true here. The main fragments of the code are as follows:
+\begin{lstlisting}[language=c++,caption=slambook2/ch9/bundle_adjustment_g2o(fragment)]
 void SolveBA(BALProblem &bal_problem) {
 	const int point_block_size = bal_problem.point_block_size();
 	const int camera_block_size = bal_problem.camera_block_size();
@@ -1226,26 +1233,24 @@ void SolveBA(BALProblem &bal_problem) {
 	}
 }
 \end{lstlisting}
-g2o和Ceres一大不同点在于，在使用稀疏优化时，g2o必须手动设置哪些顶点为边缘化顶点，否则就会报运行时错误（读者可以尝试注释掉v->setMarginalized(true)这一行）。其余地方和Ceres实验大同小异，我们就不多加介绍了。g2o实验也会输出优化前后点云，供对比查看。
+One big difference between g2o and Ceres is that when using sparse optimization, g2o must manually set which vertices are marginalized vertices, otherwise a runtime error will be reported (the reader can try to comment out the line v->setMarginalized(true)). The rest of the place and the Ceres experiment are similar, we will not introduce more. The g2o experiment also outputs a point cloud before and after optimization for comparison.
 
 \begin{figure}[!htp]
-	\centering
-	\includegraphics[width=1.0\textwidth]{backend1/g2o-ba}
-	\caption{优化前后的可视化点云。左侧为优化前初始值，右侧为优化后的。}
-	\label{fig:g2o-BA}
+\centering
+\includegraphics[width=1.0\textwidth]{backend1/g2o-ba}
+\caption{Visualization point cloud before and after optimization. The left side is the initial value before optimization, and the right side is optimized. }
+\label{fig:g2o-BA}
 \end{figure}
 
 \section{小结}
-本讲比较深入地探讨了状态估计问题与图优化的求解。我们看到在经典模型中SLAM可以看成状态估计问题。如果我们假设马尔可夫性，只考虑当前状态，则得到以EKF为代表的滤波器模型。如若不然，我们也可以选择考虑所有的运动和观测，它们构成一个最小二乘问题。在只有观测方程的情况下，这个问题称为BA，并可利用非线性优化方法求解。我们仔细讨论了求解过程中的稀疏性问题，指出了该问题与图优化之间的联系。最后，我们演示了如何使用g2o和Ceres库求解同一个优化问题，让读者对BA有一个直观的认识。
+This lecture explores the problem of state estimation and graph optimization in depth. We see that SLAM can be seen as a state estimation problem in the classical model. If we assume Markov properties and only consider the current state, we get a filter model represented by EKF. If not, we can also choose to consider all motions and observations, which constitute a least squares problem. In the case of only observation equations, this problem is called BA and can be solved using nonlinear optimization methods. We have carefully discussed the sparsity problem in the solution process and pointed out the connection between the problem and the graph optimization. Finally, we demonstrate how to use the g2o and Ceres libraries to solve the same optimization problem, giving the reader an intuitive understanding of BA.
 
-\section*{习题}
+\section*{ Exercises}
 \begin{enumerate}
-	\item 证明式\eqref{eq:kalman-K-another}成立。提示：你可能会用到SMW（Sherman-Morrison-Woodbury）公式，参考文献\cite{Sherman1950, Barfoot2016}。
-	\item 
-	对比g2o和Ceres的优化后目标函数的数值。指出为什么两者在Meshlab中效果一样但数值却不同。
-	\item 
-	对Ceres当中的部分点云进行Schur消元，看看结果会有什么区别。
-	\item 证明$\bm{S}$矩阵为半正定矩阵。
-	\item 阅读文献\cite{Kummerle2011}，看看g2o对核函数是如何处理的。与Ceres中的Loss function有何联系？
-	\item[\optional] 在两个示例中，我们优化了相机位姿、以$f, k_1, k_2$为参数的相机内参及路标点。请考虑使用第5讲介绍的完整的相机模型进行优化，即，至少考虑$f_x, f_y, p_1, p_2,$ $k_1, k_2$这些量。修改现在的Ceres和g2o程序以完成实验。
+    \item The  proof \eqref{eq:kalman-K-another} is established. Hint: You might use the SMW (Sherman-Morrison-Woodbury) formula, reference \cite{Sherman1950, Barfoot2016}.
+    \item Compare the values ​​of the optimized objective function of g2o and Ceres. Point out why the two have the same effect in Meshlab but the values ​​are different.
+    \item Perform a Schur elimination on some of the point clouds in Ceres to see what the difference is.
+    \item proves that the $\bm{S}$ matrix is ​​a semi-positive matrix.
+    \item Read the documentation \cite{Kummerle2011} and see how g2o handles kernel functions. How does it relate to the Loss function in Ceres?
+    \item[\optional] In both examples, we optimized the camera pose, camera coordinates and landmarks with $f, k_1, k_2$ as parameters. Consider optimizing with the full camera model described in Lecture 5, ie, consider at least $f_x, f_y, p_1, p_2, $ $k_1, k_2$. Modify the current Ceres and g2o programs to complete the experiment.
 \end{enumerate}
